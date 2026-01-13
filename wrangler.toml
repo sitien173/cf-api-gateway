@@ -3,14 +3,29 @@
 ## one, but with custom configuration values for each different gateway.
 ## The values shown here are just an example for testing purposes.
 
-name = "my-edge-api-gateway" # usually the name of the gateway for each user
+name = "api-gateway" # usually the name of the gateway for each user
 main = "src/index.ts"
 compatibility_date = "2022-11-17"
 
 analytics_engine_datasets = [
-  { binding = "my-edge-api-gateway" },
+  { binding = "API_ANALYTICS" }
 ]
 
 [vars] # local testing stuff, the production values are set from the API server
-GATEWAY_NAME = "my-edge-api-gateway"
-ANALYTICS_ENABLED = "false"
+GATEWAY_NAME = "api-gateway"
+ANALYTICS_ENABLED = "true"
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1

@@ -71,11 +71,16 @@ export default {
     try {
       for (const route of routes) {
         const requestUrl = new URL(originalRequest.url);
+
+        const isProxyAll = route.origin.handler === gatewayOrigins.proxyAll;
+        const pathMatches = isProxyAll
+          ? requestUrl.pathname.startsWith(route.path)
+          : route.path === requestUrl.pathname;
+
         if (
-          route.path === requestUrl.pathname &&
+          pathMatches &&
           route.method === originalRequest.method
         ) {
-          // first we handle request policies
           let modifiedRequest: IRequest = originalRequest;
           for (const policy of route.policies.request) {
             const policyResult = await policy.handler(
@@ -99,18 +104,15 @@ export default {
             modifiedRequest = policyResult;
           }
 
-          // then we handle the origin
           const originResponse = await route.origin.handler(
             modifiedRequest,
             route.origin.options
           );
-          // then we handle response policies
-          // these policies will modify the response
+
           for (const policy of route.policies.response) {
             policy.handler(originResponse, policy.options);
           }
 
-          // and finally we return the response
           const latencyEnd = Date.now();
           ctx.waitUntil(
             logAnalytics(
