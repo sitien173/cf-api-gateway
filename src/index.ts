@@ -19,8 +19,6 @@ const gateway = compileGateway(config, {
 
 export default {
   async fetch(originalRequest: IRequest, env: Env, ctx: ExecutionContext) {
-    console.log(originalRequest.url, originalRequest.method);
-
     return executeGatewayRequest(gateway, originalRequest, env, ctx, {
       logAnalytics,
     });

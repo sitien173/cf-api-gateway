@@ -1,4 +1,5 @@
 import { ErrorResponse } from "../helpers/response";
+import { emitGatewayLog, toErrorMessage } from "../gateway/logging";
 import { IRequest, TOriginHandler } from "../types";
 
 type ProxyAllOptions = {
@@ -55,7 +56,15 @@ function rewriteLocation(
 
         return location;
     } catch (e) {
-        console.error('[ProxyAll] Error rewriting location:', e);
+        emitGatewayLog(undefined, {
+            level: "error",
+            stage: "origin_rewrite",
+            outcome: "failed",
+            method: "GET",
+            path: gatewayUrl.pathname,
+            originType: "proxyAll",
+            errorMessage: toErrorMessage(e),
+        });
         return location;
     }
 }
@@ -81,7 +90,16 @@ async function checkUpstreamHealth(
         clearTimeout(timeoutId);
         return response.ok;
     } catch (error) {
-        console.error(`Health check failed for ${baseUrl}:`, error);
+        emitGatewayLog(undefined, {
+            level: "error",
+            stage: "origin_health",
+            outcome: "check_failed",
+            method: "GET",
+            path: healthPath,
+            originType: "proxyAll",
+            targetUrl: `${baseUrl.replace(/\/$/, '')}${healthPath}`,
+            errorMessage: toErrorMessage(error),
+        });
         return false;
     }
 }
@@ -136,11 +154,27 @@ export const proxyAll: TOriginHandler = async (
 
     if (isPrimaryHealthy) {
         targetUrl = `${primaryUrl.replace(/\/$/, '')}${pathAndQuery}`;
-        console.log(`[ProxyAll] Primary: ${targetUrl}`);
+        emitGatewayLog(undefined, {
+            level: "info",
+            stage: "origin",
+            outcome: "routed_primary",
+            method: request.method,
+            path: url.pathname,
+            originType: "proxyAll",
+            targetUrl,
+        });
     } else {
         targetUrl = `${fallbackUrl.replace(/\/$/, '')}${pathAndQuery}`;
         isUsingFallback = true;
-        console.log(`[ProxyAll] Fallback: ${targetUrl}`);
+        emitGatewayLog(undefined, {
+            level: "info",
+            stage: "origin",
+            outcome: "routed_fallback",
+            method: request.method,
+            path: url.pathname,
+            originType: "proxyAll",
+            targetUrl,
+        });
     }
 
     // Read the body once if it exists (to avoid ReadableStream locked errors)
@@ -169,9 +203,26 @@ export const proxyAll: TOriginHandler = async (
         // We only fallback on server errors (5xx) or if the primary is down.
         // We should NOT fallback on 401 (Unauthorized) or 403 (Forbidden) as these are legitimate responses.
         if (upstreamResponse.status >= 500 && !isUsingFallback) {
-            console.log(`[ProxyAll] Primary failed with status ${upstreamResponse.status}, trying fallback...`);
-
             const fallbackTargetUrl = `${fallbackUrl.replace(/\/$/, '')}${pathAndQuery}`;
+            emitGatewayLog(undefined, {
+                level: "info",
+                stage: "origin",
+                outcome: "primary_failed",
+                method: request.method,
+                path: url.pathname,
+                originType: "proxyAll",
+                status: upstreamResponse.status,
+                targetUrl,
+            });
+            emitGatewayLog(undefined, {
+                level: "info",
+                stage: "origin",
+                outcome: "fallback_started",
+                method: request.method,
+                path: url.pathname,
+                originType: "proxyAll",
+                targetUrl: fallbackTargetUrl,
+            });
             const fallbackHeaders = new Headers(request.headers);
             fallbackHeaders.delete('host');
 
@@ -192,6 +243,17 @@ export const proxyAll: TOriginHandler = async (
                 if (newLocation) responseHeaders.set('Location', newLocation);
             }
 
+            emitGatewayLog(undefined, {
+                level: "info",
+                stage: "origin",
+                outcome: "fallback_completed",
+                method: request.method,
+                path: url.pathname,
+                originType: "proxyAll",
+                status: fallbackResponse.status,
+                targetUrl: fallbackTargetUrl,
+            });
+
             return new Response(fallbackResponse.body, {
                 status: fallbackResponse.status,
                 headers: responseHeaders
@@ -211,14 +273,30 @@ export const proxyAll: TOriginHandler = async (
             headers: responseHeaders
         });
     } catch (error) {
-        console.error('[ProxyAll] Request error:', error);
+        emitGatewayLog(undefined, {
+            level: "error",
+            stage: "origin",
+            outcome: "request_failed",
+            method: request.method,
+            path: url.pathname,
+            originType: "proxyAll",
+            targetUrl,
+            errorMessage: toErrorMessage(error),
+        });
 
         // If we were trying primary and it failed, try fallback
         if (!isUsingFallback) {
-            console.log('[ProxyAll] Primary threw error, trying fallback...');
-
             try {
                 const fallbackTargetUrl = `${fallbackUrl.replace(/\/$/, '')}${pathAndQuery}`;
+                emitGatewayLog(undefined, {
+                    level: "info",
+                    stage: "origin",
+                    outcome: "fallback_started",
+                    method: request.method,
+                    path: url.pathname,
+                    originType: "proxyAll",
+                    targetUrl: fallbackTargetUrl,
+                });
                 const fallbackHeaders = new Headers(request.headers);
                 fallbackHeaders.delete('host');
 
@@ -229,9 +307,27 @@ export const proxyAll: TOriginHandler = async (
                 });
 
                 const fallbackResponse = await fetch(fallbackRequest);
+                emitGatewayLog(undefined, {
+                    level: "info",
+                    stage: "origin",
+                    outcome: "fallback_completed",
+                    method: request.method,
+                    path: url.pathname,
+                    originType: "proxyAll",
+                    status: fallbackResponse.status,
+                    targetUrl: fallbackTargetUrl,
+                });
                 return new Response(fallbackResponse.body, fallbackResponse);
             } catch (fallbackError) {
-                console.error('[ProxyAll] Fallback also failed:', fallbackError);
+                emitGatewayLog(undefined, {
+                    level: "error",
+                    stage: "origin",
+                    outcome: "fallback_failed",
+                    method: request.method,
+                    path: url.pathname,
+                    originType: "proxyAll",
+                    errorMessage: toErrorMessage(fallbackError),
+                });
             }
         }
 

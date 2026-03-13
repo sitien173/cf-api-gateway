@@ -1,5 +1,6 @@
 import { ErrorResponse } from "../helpers/response";
 import type { IRequest } from "../types";
+import { createLogContext, emitGatewayLog, toErrorMessage } from "./logging";
 import type {
   CompiledGateway,
   CompiledRoute,
@@ -32,6 +33,8 @@ const resolveRoute = (
 const applyResponsePolicies = async (
   route: CompiledRoute,
   response: Response,
+  request: Request,
+  dependencies: ExecutionDependencies,
 ): Promise<Response> => {
   let currentResponse = response;
 
@@ -40,6 +43,15 @@ const applyResponsePolicies = async (
     if (result instanceof Response) {
       currentResponse = result;
     }
+
+    emitGatewayLog(dependencies.logEvent, {
+      level: "info",
+      stage: "response_policy",
+      outcome: "applied",
+      ...createLogContext(request, route),
+      policyName: policy.name,
+      status: currentResponse.status,
+    });
   }
 
   return currentResponse;
@@ -56,8 +68,25 @@ const finalizeResponse = (
   const latency = (dependencies.now ?? defaultNow)() - latencyStart;
 
   if (dependencies.logAnalytics) {
+    emitGatewayLog(dependencies.logEvent, {
+      level: "info",
+      stage: "analytics",
+      outcome: "scheduled",
+      ...createLogContext(request),
+      status: response.status,
+      latencyMs: latency,
+    });
     ctx.waitUntil(dependencies.logAnalytics(request, response, env, latency));
   }
+
+  emitGatewayLog(dependencies.logEvent, {
+    level: "info",
+    stage: "response_finalization",
+    outcome: "completed",
+    ...createLogContext(request),
+    status: response.status,
+    latencyMs: latency,
+  });
 
   return response;
 };
@@ -72,9 +101,24 @@ export const executeGatewayRequest = async (
   const latencyStart = (dependencies.now ?? defaultNow)();
 
   try {
+    emitGatewayLog(dependencies.logEvent, {
+      level: "info",
+      stage: "request_received",
+      outcome: "received",
+      ...createLogContext(originalRequest),
+    });
+
     const route = resolveRoute(gateway, originalRequest);
 
     if (!route) {
+      emitGatewayLog(dependencies.logEvent, {
+        level: "info",
+        stage: "route_resolution",
+        outcome: "route_miss",
+        ...createLogContext(originalRequest),
+        status: 404,
+      });
+
       return finalizeResponse(
         originalRequest,
         new ErrorResponse("Route not found", 404),
@@ -85,12 +129,28 @@ export const executeGatewayRequest = async (
       );
     }
 
+    emitGatewayLog(dependencies.logEvent, {
+      level: "info",
+      stage: "route_resolution",
+      outcome: "matched",
+      ...createLogContext(originalRequest, route),
+    });
+
     let modifiedRequest: IRequest = originalRequest;
 
     for (const policy of route.requestPolicies) {
       const result = await policy.handler(modifiedRequest, policy.options);
 
       if (result instanceof Response) {
+        emitGatewayLog(dependencies.logEvent, {
+          level: "info",
+          stage: "request_policy",
+          outcome: "short_circuit",
+          ...createLogContext(originalRequest, route),
+          policyName: policy.name,
+          status: result.status,
+        });
+
         return finalizeResponse(
           originalRequest,
           result,
@@ -101,14 +161,42 @@ export const executeGatewayRequest = async (
         );
       }
 
+      emitGatewayLog(dependencies.logEvent, {
+        level: "info",
+        stage: "request_policy",
+        outcome: "continued",
+        ...createLogContext(originalRequest, route),
+        policyName: policy.name,
+      });
+
       modifiedRequest = result;
     }
+
+    emitGatewayLog(dependencies.logEvent, {
+      level: "info",
+      stage: "origin",
+      outcome: "started",
+      ...createLogContext(originalRequest, route),
+    });
 
     const originResponse = await route.origin.handler(
       modifiedRequest,
       route.origin.options,
     );
-    const finalResponse = await applyResponsePolicies(route, originResponse);
+    emitGatewayLog(dependencies.logEvent, {
+      level: "info",
+      stage: "origin",
+      outcome: "completed",
+      ...createLogContext(originalRequest, route),
+      status: originResponse.status,
+    });
+
+    const finalResponse = await applyResponsePolicies(
+      route,
+      originResponse,
+      originalRequest,
+      dependencies,
+    );
 
     return finalizeResponse(
       originalRequest,
@@ -119,7 +207,14 @@ export const executeGatewayRequest = async (
       latencyStart,
     );
   } catch (error) {
-    console.log(error);
+    emitGatewayLog(dependencies.logEvent, {
+      level: "error",
+      stage: "execution",
+      outcome: "failed",
+      ...createLogContext(originalRequest),
+      status: 500,
+      errorMessage: toErrorMessage(error),
+    });
 
     return finalizeResponse(
       originalRequest,

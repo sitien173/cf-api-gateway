@@ -1,4 +1,5 @@
 import { ErrorResponse } from "../helpers/response";
+import { emitGatewayLog, toErrorMessage } from "../gateway/logging";
 import { IRequest, TOriginHandler } from "../types";
 
 type HealthCheckResult = {
@@ -55,7 +56,15 @@ function rewriteLocation(
 
         return location;
     } catch (e) {
-        console.error('[UpstreamWithFallback] Error rewriting location:', e);
+        emitGatewayLog(undefined, {
+            level: "error",
+            stage: "origin_rewrite",
+            outcome: "failed",
+            method: "GET",
+            path: gatewayUrl.pathname,
+            originType: "upstreamWithFallback",
+            errorMessage: toErrorMessage(e),
+        });
         return location;
     }
 }
@@ -81,7 +90,16 @@ async function checkUpstreamHealth(
         clearTimeout(timeoutId);
         return response.ok;
     } catch (error) {
-        console.error(`Health check failed for ${baseUrl}:`, error);
+        emitGatewayLog(undefined, {
+            level: "error",
+            stage: "origin_health",
+            outcome: "check_failed",
+            method: "GET",
+            path: healthPath,
+            originType: "upstreamWithFallback",
+            targetUrl: `${baseUrl.replace(/\/$/, '')}${healthPath}`,
+            errorMessage: toErrorMessage(error),
+        });
         return false;
     }
 }
@@ -150,11 +168,27 @@ export const upstreamWithFallback: TOriginHandler = async (
 
     if (isPrimaryHealthy) {
         targetUrl = `${primaryUrl.replace(/\/$/, '')}${pathAndQuery}`;
-        console.log(`Routing to primary: ${targetUrl}`);
+        emitGatewayLog(undefined, {
+            level: "info",
+            stage: "origin",
+            outcome: "routed_primary",
+            method: request.method,
+            path: url.pathname,
+            originType: "upstreamWithFallback",
+            targetUrl,
+        });
     } else {
         targetUrl = `${fallbackUrl.replace(/\/$/, '')}${pathAndQuery}`;
         isUsingFallback = true;
-        console.log(`Primary unhealthy, routing to fallback: ${targetUrl}`);
+        emitGatewayLog(undefined, {
+            level: "info",
+            stage: "origin",
+            outcome: "routed_fallback",
+            method: request.method,
+            path: url.pathname,
+            originType: "upstreamWithFallback",
+            targetUrl,
+        });
     }
 
     // Read the body once if it exists (to avoid ReadableStream locked errors)
@@ -181,9 +215,26 @@ export const upstreamWithFallback: TOriginHandler = async (
         // If primary failed and we haven't tried fallback yet, try fallback
         // We only fallback on server errors (5xx) or if the primary is down.
         if (upstreamResponse.status >= 500 && !isUsingFallback) {
-            console.log(`Primary failed with status ${upstreamResponse.status}, trying fallback...`);
-
             const fallbackTargetUrl = `${fallbackUrl.replace(/\/$/, '')}${pathAndQuery}`;
+            emitGatewayLog(undefined, {
+                level: "info",
+                stage: "origin",
+                outcome: "primary_failed",
+                method: request.method,
+                path: url.pathname,
+                originType: "upstreamWithFallback",
+                status: upstreamResponse.status,
+                targetUrl,
+            });
+            emitGatewayLog(undefined, {
+                level: "info",
+                stage: "origin",
+                outcome: "fallback_started",
+                method: request.method,
+                path: url.pathname,
+                originType: "upstreamWithFallback",
+                targetUrl: fallbackTargetUrl,
+            });
             const fallbackHeaders = new Headers(request.headers);
             fallbackHeaders.delete('host');
 
@@ -204,6 +255,17 @@ export const upstreamWithFallback: TOriginHandler = async (
                 if (newLocation) responseHeaders.set('Location', newLocation);
             }
 
+            emitGatewayLog(undefined, {
+                level: "info",
+                stage: "origin",
+                outcome: "fallback_completed",
+                method: request.method,
+                path: url.pathname,
+                originType: "upstreamWithFallback",
+                status: fallbackResponse.status,
+                targetUrl: fallbackTargetUrl,
+            });
+
             return new Response(fallbackResponse.body, {
                 status: fallbackResponse.status,
                 headers: responseHeaders
@@ -223,14 +285,30 @@ export const upstreamWithFallback: TOriginHandler = async (
             headers: responseHeaders
         });
     } catch (error) {
-        console.error('Upstream request error:', error);
+        emitGatewayLog(undefined, {
+            level: "error",
+            stage: "origin",
+            outcome: "request_failed",
+            method: request.method,
+            path: url.pathname,
+            originType: "upstreamWithFallback",
+            targetUrl,
+            errorMessage: toErrorMessage(error),
+        });
 
         // If we were trying primary and it failed, try fallback
         if (!isUsingFallback) {
-            console.log('Primary threw error, trying fallback...');
-
             try {
                 const fallbackTargetUrl = `${fallbackUrl.replace(/\/$/, '')}${pathAndQuery}`;
+                emitGatewayLog(undefined, {
+                    level: "info",
+                    stage: "origin",
+                    outcome: "fallback_started",
+                    method: request.method,
+                    path: url.pathname,
+                    originType: "upstreamWithFallback",
+                    targetUrl: fallbackTargetUrl,
+                });
                 const fallbackHeaders = new Headers(request.headers);
                 fallbackHeaders.delete('host');
 
@@ -241,9 +319,27 @@ export const upstreamWithFallback: TOriginHandler = async (
                 });
 
                 const fallbackResponse = await fetch(fallbackRequest);
+                emitGatewayLog(undefined, {
+                    level: "info",
+                    stage: "origin",
+                    outcome: "fallback_completed",
+                    method: request.method,
+                    path: url.pathname,
+                    originType: "upstreamWithFallback",
+                    status: fallbackResponse.status,
+                    targetUrl: fallbackTargetUrl,
+                });
                 return new Response(fallbackResponse.body, fallbackResponse);
             } catch (fallbackError) {
-                console.error('Fallback failed:', fallbackError);
+                emitGatewayLog(undefined, {
+                    level: "error",
+                    stage: "origin",
+                    outcome: "fallback_failed",
+                    method: request.method,
+                    path: url.pathname,
+                    originType: "upstreamWithFallback",
+                    errorMessage: toErrorMessage(fallbackError),
+                });
             }
         }
 

@@ -79,9 +79,30 @@ export type AnalyticsLogger = (
   latency: number
 ) => Promise<void>;
 
+export type GatewayLogLevel = "info" | "error";
+
+export type GatewayLogEvent = {
+  level: GatewayLogLevel;
+  stage: string;
+  outcome: string;
+  method: string;
+  path: string;
+  routePath?: string;
+  routeMethod?: string;
+  originType?: string;
+  policyName?: string;
+  status?: number;
+  latencyMs?: number;
+  targetUrl?: string;
+  errorMessage?: string;
+};
+
+export type GatewayLogger = (event: GatewayLogEvent) => void;
+
 export type ExecutionDependencies = {
   now?: () => number;
   logAnalytics?: AnalyticsLogger;
+  logEvent?: GatewayLogger;
 };
 
 export type GatewayExecutionContext = Pick<

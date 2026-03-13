@@ -1,4 +1,5 @@
 import { ErrorResponse } from "../helpers/response";
+import { emitGatewayLog, toErrorMessage } from "../gateway/logging";
 import { IRequest, TOriginHandler } from "../types";
 
 type UrlOptions = {
@@ -14,7 +15,16 @@ export const url: TOriginHandler = async (
     const originFetch = await fetch(originRequest.url, originRequest);
     return new Response(originFetch.body, originFetch);
   } catch (err) {
-    console.log(err);
+    emitGatewayLog(undefined, {
+      level: "error",
+      stage: "origin",
+      outcome: "request_failed",
+      method: request.method,
+      path: new URL(request.url).pathname,
+      originType: "url",
+      targetUrl: originRequest.url,
+      errorMessage: toErrorMessage(err),
+    });
     return new ErrorResponse("Origin request failed", 500);
   }
 };

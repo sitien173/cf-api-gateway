@@ -1,81 +1,274 @@
 {
-    "routes": [
-        {
-            "path": "/udemy/",
-            "method": "GET",
-            "origin": {
-                "type": "proxyAll",
-                "options": {
-                    "primaryUrl": "https://api-udemy.hcmc.online",
-                    "fallbackUrl": "https://udemy-cookies-worker-commercial-prod.sitienbmt.workers.dev",
-                    "stripPrefix": "/udemy",
-                    "healthCheckPath": "/api/health",
-                    "healthCheckTimeout": 5000,
-                    "healthCheckCacheTtl": 60000
-                }
-            },
-            "policies": {
-                "request": [],
-                "response": []
-            }
-        },
-        {
-            "path": "/udemy/",
-            "method": "POST",
-            "origin": {
-                "type": "proxyAll",
-                "options": {
-                    "primaryUrl": "https://api-udemy.hcmc.online",
-                    "fallbackUrl": "https://udemy-cookies-worker-commercial-prod.sitienbmt.workers.dev",
-                    "stripPrefix": "/udemy",
-                    "healthCheckPath": "/api/health",
-                    "healthCheckTimeout": 5000,
-                    "healthCheckCacheTtl": 60000
-                }
-            },
-            "policies": {
-                "request": [],
-                "response": []
-            }
-        },
-        {
-            "path": "/udemy/",
-            "method": "PUT",
-            "origin": {
-                "type": "proxyAll",
-                "options": {
-                    "primaryUrl": "https://api-udemy.hcmc.online",
-                    "fallbackUrl": "https://udemy-cookies-worker-commercial-prod.sitienbmt.workers.dev",
-                    "stripPrefix": "/udemy",
-                    "healthCheckPath": "/api/health",
-                    "healthCheckTimeout": 5000,
-                    "healthCheckCacheTtl": 60000
-                }
-            },
-            "policies": {
-                "request": [],
-                "response": []
-            }
-        },
-        {
-            "path": "/udemy/",
-            "method": "DELETE",
-            "origin": {
-                "type": "proxyAll",
-                "options": {
-                    "primaryUrl": "https://api-udemy.hcmc.online",
-                    "fallbackUrl": "https://udemy-cookies-worker-commercial-prod.sitienbmt.workers.dev",
-                    "stripPrefix": "/udemy",
-                    "healthCheckPath": "/api/health",
-                    "healthCheckTimeout": 5000,
-                    "healthCheckCacheTtl": 60000
-                }
-            },
-            "policies": {
-                "request": [],
-                "response": []
-            }
+  "routes": [
+    {
+      "comment": "GET cookies - upstream to event sourcing worker",
+      "path": "/udemy",
+      "method": "GET",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://cookies-updater-udemy-hkdfbxdrcub5b3d0.southeastasia-01.azurewebsites.net/cookies",
+          "pathRewrite": "/udemy"
         }
-    ],
-    "policies": []
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    },
+    {
+      "comment": "GET Udemy Base URL - upstream to event sourcing worker",
+      "path": "/udemy/api/public/udemy-base-url",
+      "method": "GET",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://cookies-updater-udemy-hkdfbxdrcub5b3d0.southeastasia-01.azurewebsites.net",
+          "pathRewrite": "/udemy"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    },
+    {
+      "comment": "GET API endpoints - upstream to .NET read model",
+      "path": "/udemy/api/*",
+      "method": "GET",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://udemy-api.hcmc.online",
+          "pathRewrite": "/udemy"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    },
+    {
+      "comment": "POST API endpoints - upstream to event sourcing worker",
+      "path": "/udemy/api/*",
+      "method": "POST",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://cookies-updater-udemy-hkdfbxdrcub5b3d0.southeastasia-01.azurewebsites.net",
+          "pathRewrite": "/udemy"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    },
+    {
+      "comment": "PUT API endpoints - upstream to event sourcing worker",
+      "path": "/udemy/api/*",
+      "method": "PUT",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://cookies-updater-udemy-hkdfbxdrcub5b3d0.southeastasia-01.azurewebsites.net",
+          "pathRewrite": "/udemy"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    },
+    {
+      "comment": "DELETE API endpoints - upstream to event sourcing worker",
+      "path": "/udemy/api/*",
+      "method": "DELETE",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://cookies-updater-udemy-hkdfbxdrcub5b3d0.southeastasia-01.azurewebsites.net",
+          "pathRewrite": "/udemy"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    },
+    {
+      "comment": "=== V2 ROUTES (Embedded Document Schema) ===",
+      "path": "/udemy/v2/health",
+      "method": "GET",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://cookies-updater-udemy-v2-fad5f6hqephqfsan.southeastasia-01.azurewebsites.net/api/health",
+          "pathRewrite": "/udemy/v2"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    },
+    {
+      "comment": "V2 GET cookies - upstream to Azure Functions",
+      "path": "/udemy/v2",
+      "method": "GET",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://cookies-updater-udemy-v2-fad5f6hqephqfsan.southeastasia-01.azurewebsites.net/cookies",
+          "pathRewrite": "/udemy/v2"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    },
+    {
+      "comment": "V2 GET API endpoints - upstream to .NET read-only backend",
+      "path": "/udemy/v2/api/*",
+      "method": "GET",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://udemy-api-v2.hcmc.online",
+          "pathRewrite": "/udemy/v2"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    },
+    {
+      "comment": "V2 POST API endpoints - upstream to Azure Functions (event producer)",
+      "path": "/udemy/v2/api/*",
+      "method": "POST",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://cookies-updater-udemy-v2-fad5f6hqephqfsan.southeastasia-01.azurewebsites.net",
+          "pathRewrite": "/udemy/v2"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    },
+    {
+      "comment": "V2 PUT API endpoints - upstream to Azure Functions (event producer)",
+      "path": "/udemy/v2/api/*",
+      "method": "PUT",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://cookies-updater-udemy-v2-fad5f6hqephqfsan.southeastasia-01.azurewebsites.net",
+          "pathRewrite": "/udemy/v2"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    },
+    {
+      "comment": "V2 DELETE API endpoints - upstream to Azure Functions (event producer)",
+      "path": "/udemy/v2/api/*",
+      "method": "DELETE",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://cookies-updater-udemy-v2-fad5f6hqephqfsan.southeastasia-01.azurewebsites.net",
+          "pathRewrite": "/udemy/v2"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "udemy-cors",
+          "hcmc-cors"
+        ]
+      }
+    }
+  ],
+  "policies": [
+    {
+      "name": "udemy-cors",
+      "type": "cors",
+      "options": {
+        "allowedOrigins": [
+          "*.udemy.com"
+        ],
+        "allowedMethods": [
+          "GET",
+          "POST",
+          "PUT",
+          "DELETE",
+          "OPTIONS"
+        ],
+        "allowedHeaders": [
+          "*"
+        ],
+        "allowCredentials": true
+      }
+    },
+    {
+      "name": "hcmc-cors",
+      "type": "cors",
+      "options": {
+        "allowedOrigins": [
+          "*.hcmc.online"
+        ],
+        "allowedMethods": [
+          "GET",
+          "POST",
+          "PUT",
+          "DELETE",
+          "OPTIONS"
+        ],
+        "allowedHeaders": [
+          "*"
+        ],
+        "allowCredentials": true
+      }
+    }
+  ]
 }
