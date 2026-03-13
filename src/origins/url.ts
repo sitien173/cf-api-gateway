@@ -11,7 +11,7 @@ export const url: TOriginHandler = async (
 ) => {
   const originRequest = new Request(options.url, new Request(request));
   try {
-    const originFetch = await fetch(originRequest);
+    const originFetch = await fetch(originRequest.url, originRequest);
     return new Response(originFetch.body, originFetch);
   } catch (err) {
     console.log(err);

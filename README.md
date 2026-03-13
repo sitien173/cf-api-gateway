@@ -56,7 +56,7 @@ Edit `src/config.json` with your URLs:
 ### 3. Deploy
 
 ```bash
-npx wrangler publish
+npx wrangler deploy
 ```
 
 That's it! Your gateway is now live at `https://api-gateway.YOUR-SUBDOMAIN.workers.dev`
@@ -265,7 +265,7 @@ ANALYTICS_ENABLED = "true"
 ### 2. Deploy
 
 ```bash
-npx wrangler publish
+npx wrangler deploy
 ```
 
 ### 3. View Analytics
@@ -336,9 +336,9 @@ let baseURL = "https://api-gateway.YOUR-SUBDOMAIN.workers.dev/udemy"
 
 **Issue**: Missing type definitions  
 **Impact**: None (compile-time only)  
-**Fix** (optional):
+**Fix**:
 ```bash
-npm install -D @cloudflare/workers-types
+npx wrangler types
 ```
 
 ---
@@ -404,7 +404,7 @@ Add rate limiting policy:
 - [ ] Verified health checks work on both upstreams
 - [ ] Tested failover by stopping primary
 - [ ] Enabled analytics (optional)
-- [ ] Deployed with `wrangler publish`
+- [ ] Deployed with `wrangler deploy`
 - [ ] Updated client applications to use gateway URL
 - [ ] Set up monitoring/alerting
 

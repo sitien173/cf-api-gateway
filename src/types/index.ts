@@ -12,7 +12,10 @@ export type TRequestPolicyHandler = (
   options: any
 ) => Promise<IRequest | Response>;
 
-export type TResponsePolicyHandler = (response: Response, options: any) => void;
+export type TResponsePolicyHandler = (
+  response: Response,
+  options: any
+) => void | Response | Promise<void | Response>;
 
 export type TPolicyName = string;
 

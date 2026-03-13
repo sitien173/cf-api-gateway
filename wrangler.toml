@@ -1,3 +1,5 @@
+"$schema" = "./node_modules/wrangler/config-schema.json"
+
 ## This Wrangler configuration file is an example configuration
 ## While using Steels Portal, a custom configuration file is created that resembles this 
 ## one, but with custom configuration values for each different gateway.
@@ -5,7 +7,8 @@
 
 name = "api-gateway" # usually the name of the gateway for each user
 main = "src/index.ts"
-compatibility_date = "2022-11-17"
+compatibility_date = "2026-03-13"
+compatibility_flags = ["nodejs_compat"]
 
 analytics_engine_datasets = [
   { binding = "API_ANALYTICS" }
@@ -16,16 +19,15 @@ GATEWAY_NAME = "api-gateway"
 ANALYTICS_ENABLED = "true"
 
 [observability]
-enabled = false
-head_sampling_rate = 1
+enabled = true
 
 [observability.logs]
 enabled = true
+invocation_logs = true
 head_sampling_rate = 1
 persist = true
-invocation_logs = true
 
 [observability.traces]
-enabled = false
-persist = true
+enabled = true
 head_sampling_rate = 1
+persist = true

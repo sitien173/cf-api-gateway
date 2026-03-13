@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "api-gateway" generated at 2026-03-13T06:25:05.745Z.
