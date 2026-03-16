@@ -1,5 +1,5 @@
 import { ErrorResponse } from "../helpers/response";
-import { emitGatewayLog, toErrorMessage } from "../gateway/logging";
+import { createOriginLogContext, emitGatewayLog, toErrorMessage } from "../gateway/logging";
 import { IRequest, TOriginHandler } from "../types";
 
 type HealthCheckResult = {
@@ -60,9 +60,7 @@ function rewriteLocation(
             level: "error",
             stage: "origin_rewrite",
             outcome: "failed",
-            method: "GET",
-            path: gatewayUrl.pathname,
-            originType: "upstreamWithFallback",
+            ...createOriginLogContext(new Request(gatewayUrl.toString()), "upstreamWithFallback"),
             errorMessage: toErrorMessage(e),
         });
         return location;
@@ -94,9 +92,7 @@ async function checkUpstreamHealth(
             level: "error",
             stage: "origin_health",
             outcome: "check_failed",
-            method: "GET",
-            path: healthPath,
-            originType: "upstreamWithFallback",
+            ...createOriginLogContext(new Request(`https://health-check.local${healthPath}`), "upstreamWithFallback"),
             targetUrl: `${baseUrl.replace(/\/$/, '')}${healthPath}`,
             errorMessage: toErrorMessage(error),
         });
@@ -172,9 +168,7 @@ export const upstreamWithFallback: TOriginHandler = async (
             level: "info",
             stage: "origin",
             outcome: "routed_primary",
-            method: request.method,
-            path: url.pathname,
-            originType: "upstreamWithFallback",
+            ...createOriginLogContext(request, "upstreamWithFallback"),
             targetUrl,
         });
     } else {
@@ -184,9 +178,7 @@ export const upstreamWithFallback: TOriginHandler = async (
             level: "info",
             stage: "origin",
             outcome: "routed_fallback",
-            method: request.method,
-            path: url.pathname,
-            originType: "upstreamWithFallback",
+            ...createOriginLogContext(request, "upstreamWithFallback"),
             targetUrl,
         });
     }
@@ -220,9 +212,7 @@ export const upstreamWithFallback: TOriginHandler = async (
                 level: "info",
                 stage: "origin",
                 outcome: "primary_failed",
-                method: request.method,
-                path: url.pathname,
-                originType: "upstreamWithFallback",
+                ...createOriginLogContext(request, "upstreamWithFallback"),
                 status: upstreamResponse.status,
                 targetUrl,
             });
@@ -230,9 +220,7 @@ export const upstreamWithFallback: TOriginHandler = async (
                 level: "info",
                 stage: "origin",
                 outcome: "fallback_started",
-                method: request.method,
-                path: url.pathname,
-                originType: "upstreamWithFallback",
+                ...createOriginLogContext(request, "upstreamWithFallback"),
                 targetUrl: fallbackTargetUrl,
             });
             const fallbackHeaders = new Headers(request.headers);
@@ -259,9 +247,7 @@ export const upstreamWithFallback: TOriginHandler = async (
                 level: "info",
                 stage: "origin",
                 outcome: "fallback_completed",
-                method: request.method,
-                path: url.pathname,
-                originType: "upstreamWithFallback",
+                ...createOriginLogContext(request, "upstreamWithFallback"),
                 status: fallbackResponse.status,
                 targetUrl: fallbackTargetUrl,
             });
@@ -289,9 +275,7 @@ export const upstreamWithFallback: TOriginHandler = async (
             level: "error",
             stage: "origin",
             outcome: "request_failed",
-            method: request.method,
-            path: url.pathname,
-            originType: "upstreamWithFallback",
+            ...createOriginLogContext(request, "upstreamWithFallback"),
             targetUrl,
             errorMessage: toErrorMessage(error),
         });
@@ -304,9 +288,7 @@ export const upstreamWithFallback: TOriginHandler = async (
                     level: "info",
                     stage: "origin",
                     outcome: "fallback_started",
-                    method: request.method,
-                    path: url.pathname,
-                    originType: "upstreamWithFallback",
+                    ...createOriginLogContext(request, "upstreamWithFallback"),
                     targetUrl: fallbackTargetUrl,
                 });
                 const fallbackHeaders = new Headers(request.headers);
@@ -323,9 +305,7 @@ export const upstreamWithFallback: TOriginHandler = async (
                     level: "info",
                     stage: "origin",
                     outcome: "fallback_completed",
-                    method: request.method,
-                    path: url.pathname,
-                    originType: "upstreamWithFallback",
+                    ...createOriginLogContext(request, "upstreamWithFallback"),
                     status: fallbackResponse.status,
                     targetUrl: fallbackTargetUrl,
                 });
@@ -335,9 +315,7 @@ export const upstreamWithFallback: TOriginHandler = async (
                     level: "error",
                     stage: "origin",
                     outcome: "fallback_failed",
-                    method: request.method,
-                    path: url.pathname,
-                    originType: "upstreamWithFallback",
+                    ...createOriginLogContext(request, "upstreamWithFallback"),
                     errorMessage: toErrorMessage(fallbackError),
                 });
             }

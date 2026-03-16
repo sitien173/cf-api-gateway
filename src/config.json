@@ -227,6 +227,74 @@
           "hcmc-cors"
         ]
       }
+    },
+    {
+      "path": "/config-vault/*",
+      "method": "GET",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://config-vault.hcmc.online",
+          "pathRewrite": "/config-vault"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "config-vault-cors"
+        ]
+      }
+    },
+    {
+      "path": "/config-vault/*",
+      "method": "POST",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://config-vault.hcmc.online",
+          "pathRewrite": "/config-vault"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "config-vault-cors"
+        ]
+      }
+    },
+    {
+      "path": "/config-vault/*",
+      "method": "PUT",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://config-vault.hcmc.online",
+          "pathRewrite": "/config-vault"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "config-vault-cors"
+        ]
+      }
+    },
+    {
+      "path": "/config-vault/*",
+      "method": "DELETE",
+      "origin": {
+        "type": "url",
+        "options": {
+          "url": "https://config-vault.hcmc.online",
+          "pathRewrite": "/config-vault"
+        }
+      },
+      "policies": {
+        "request": [],
+        "response": [
+          "config-vault-cors"
+        ]
+      }
     }
   ],
   "policies": [
@@ -268,6 +336,26 @@
           "*"
         ],
         "allowCredentials": true
+      }
+    },
+    {
+      "name": "config-vault-cors",
+      "type": "cors",
+      "options": {
+        "allowedOrigins": [
+          "*"
+        ],
+        "allowedMethods": [
+          "GET",
+          "POST",
+          "PUT",
+          "DELETE",
+          "OPTIONS"
+        ],
+        "allowedHeaders": [
+          "*"
+        ],
+        "allowCredentials": false
       }
     }
   ]

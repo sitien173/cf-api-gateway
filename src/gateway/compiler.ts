@@ -9,8 +9,18 @@ import type {
   RouteMatchMode,
 } from "./types";
 
-const resolveMatchMode = (originType: string): RouteMatchMode =>
-  originType === "proxyAll" ? "prefix" : "exact";
+const hasWildcardSuffix = (path: string): boolean => path.endsWith("/*");
+
+const resolveMatchMode = (originType: string, path: string): RouteMatchMode =>
+  originType === "proxyAll" || hasWildcardSuffix(path) ? "prefix" : "exact";
+
+const normalizeRoutePath = (path: string, matchMode: RouteMatchMode): string => {
+  if (matchMode === "prefix" && hasWildcardSuffix(path)) {
+    return path.slice(0, -1);
+  }
+
+  return path;
+};
 
 const buildPolicyDefinitions = (
   policies: GatewayPolicyConfig[],
@@ -60,11 +70,13 @@ export const compileGateway = (
       throw new Error(`Origin ${route.origin.type} not found`);
     }
 
+    const matchMode = resolveMatchMode(route.origin.type, route.path);
+
     return {
-      path: route.path,
+      path: normalizeRoutePath(route.path, matchMode),
       method: route.method,
       originType: route.origin.type,
-      matchMode: resolveMatchMode(route.origin.type),
+      matchMode,
       origin: {
         handler: originHandler,
         options: route.origin.options,

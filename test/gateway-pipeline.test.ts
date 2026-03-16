@@ -86,7 +86,15 @@ test("compileGateway resolves handlers and rejects unknown policy references", (
 test("executeGatewayRequest short-circuits when a request policy returns a response", async () => {
   let originCalls = 0;
   const analytics: Array<{ path: string; status: number; latency: number }> = [];
-  const logs: Array<{ stage: string; outcome: string; status?: number; policyName?: string }> = [];
+  const logs: Array<{
+    stage: string;
+    outcome: string;
+    status?: number;
+    policyName?: string;
+    query?: string;
+    params?: Record<string, string>;
+    headers?: Record<string, string>;
+  }> = [];
   const { ctx, flush } = createContext();
 
   const gateway = compileGateway(
@@ -130,7 +138,13 @@ test("executeGatewayRequest short-circuits when a request policy returns a respo
 
   const response = await executeGatewayRequest(
     gateway,
-    new Request("https://gateway.example.com/api/test"),
+    new Request("https://gateway.example.com/api/test?key=abc&device=xyz", {
+      headers: {
+        "x-device-id": "device-123",
+        "x-api-key": "secret-api-key",
+        "x-license-key": "secret-license-key",
+      },
+    }),
     { ANALYTICS_ENABLED: "true", GATEWAY_NAME: "test-gateway" },
     ctx,
     {
@@ -141,6 +155,9 @@ test("executeGatewayRequest short-circuits when a request policy returns a respo
           outcome: event.outcome,
           status: event.status,
           policyName: event.policyName,
+          query: event.query,
+          params: event.params,
+          headers: event.headers,
         });
       },
       logAnalytics: async (request, finalResponse, _env, latency) => {
@@ -159,14 +176,29 @@ test("executeGatewayRequest short-circuits when a request policy returns a respo
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "blocked");
   assert.deepEqual(analytics, [{ path: "/api/test", status: 401, latency: 0 }]);
+  assert.equal(logs[0].query, "?key=abc&device=xyz");
+  assert.deepEqual(logs[0].params, { key: "abc", device: "xyz" });
+  assert.deepEqual(logs[0].headers, {
+    "x-api-key": "[REDACTED]",
+    "x-device-id": "device-123",
+    "x-license-key": "[REDACTED]",
+  });
   assert.deepEqual(
-    logs.map((log) => [log.stage, log.outcome, log.status ?? null, log.policyName ?? null]),
+    logs.map((log) => [
+      log.stage,
+      log.outcome,
+      log.status ?? null,
+      log.policyName ?? null,
+      log.query ?? null,
+      JSON.stringify(log.params ?? {}),
+      JSON.stringify(log.headers ?? {}),
+    ]),
     [
-      ["request_received", "received", null, null],
-      ["route_resolution", "matched", null, null],
-      ["request_policy", "short_circuit", 401, "stop"],
-      ["analytics", "scheduled", 401, null],
-      ["response_finalization", "completed", 401, null],
+      ["request_received", "received", null, null, "?key=abc&device=xyz", JSON.stringify({ key: "abc", device: "xyz" }), JSON.stringify({ "x-api-key": "[REDACTED]", "x-device-id": "device-123", "x-license-key": "[REDACTED]" })],
+      ["route_resolution", "matched", null, null, "?key=abc&device=xyz", JSON.stringify({ key: "abc", device: "xyz" }), JSON.stringify({ "x-api-key": "[REDACTED]", "x-device-id": "device-123", "x-license-key": "[REDACTED]" })],
+      ["request_policy", "short_circuit", 401, "stop", "?key=abc&device=xyz", JSON.stringify({ key: "abc", device: "xyz" }), JSON.stringify({ "x-api-key": "[REDACTED]", "x-device-id": "device-123", "x-license-key": "[REDACTED]" })],
+      ["analytics", "scheduled", 401, null, "?key=abc&device=xyz", JSON.stringify({ key: "abc", device: "xyz" }), JSON.stringify({ "x-api-key": "[REDACTED]", "x-device-id": "device-123", "x-license-key": "[REDACTED]" })],
+      ["response_finalization", "completed", 401, null, "?key=abc&device=xyz", JSON.stringify({ key: "abc", device: "xyz" }), JSON.stringify({ "x-api-key": "[REDACTED]", "x-device-id": "device-123", "x-license-key": "[REDACTED]" })],
     ],
   );
 });
@@ -249,6 +281,175 @@ test("executeGatewayRequest invokes origin and response policies for a matched r
       ["origin", "completed", 200, null],
       ["response_policy", "applied", 200, "tag"],
       ["response_finalization", "completed", 200, null],
+    ],
+  );
+});
+
+test("executeGatewayRequest matches wildcard url routes as prefixes", async () => {
+  const { ctx, flush } = createContext();
+  const logs: Array<{ stage: string; outcome: string; routePath?: string; status?: number }> = [];
+
+  const gateway = compileGateway(
+    {
+      policies: [],
+      routes: [
+        {
+          path: "/udemy/v2/api/*",
+          method: "GET",
+          origin: {
+            type: "url",
+            options: { url: "https://origin.example.com" },
+          },
+          policies: {
+            request: [],
+            response: [],
+          },
+        },
+      ],
+    },
+    {
+      requestPolicies: {},
+      responsePolicies: {},
+      origins: {
+        url: async () => new Response("matched", { status: 200 }),
+      },
+    },
+  );
+
+  const response = await executeGatewayRequest(
+    gateway,
+    new Request("https://gateway.example.com/udemy/v2/api/sync"),
+    { ANALYTICS_ENABLED: "false", GATEWAY_NAME: "test-gateway" },
+    ctx,
+    {
+      logEvent: (event) => {
+        logs.push({
+          stage: event.stage,
+          outcome: event.outcome,
+          routePath: event.routePath,
+          status: event.status,
+        });
+      },
+    },
+  );
+
+  await flush();
+
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "matched");
+  assert.deepEqual(
+    logs.map((log) => [log.stage, log.outcome, log.routePath ?? null, log.status ?? null]),
+    [
+      ["request_received", "received", null, null],
+      ["route_resolution", "matched", "/udemy/v2/api/", null],
+      ["origin", "started", "/udemy/v2/api/", null],
+      ["origin", "completed", "/udemy/v2/api/", 200],
+      ["response_finalization", "completed", null, 200],
+    ],
+  );
+});
+
+test("executeGatewayRequest handles CORS preflight without hitting origin", async () => {
+  const { ctx, flush } = createContext();
+  const logs: Array<{ stage: string; outcome: string; routePath?: string; status?: number }> = [];
+  let originCalls = 0;
+
+  const gateway = compileGateway(
+    {
+      policies: [
+        {
+          name: "cors-policy",
+          type: "cors",
+          options: {
+            allowedOrigins: ["http://localhost:3000"],
+            allowedMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            allowedHeaders: ["x-admin-key"],
+            allowCredentials: true,
+          },
+        },
+      ],
+      routes: [
+        {
+          path: "/udemy/v2/api/*",
+          method: "GET",
+          origin: {
+            type: "url",
+            options: { url: "https://origin.example.com" },
+          },
+          policies: {
+            request: [],
+            response: ["cors-policy"],
+          },
+        },
+      ],
+    },
+    {
+      requestPolicies: {},
+      responsePolicies: {
+        cors: (response: Response, options: any) => {
+          if (options.allowedOrigins.length > 0) {
+            response.headers.set("Access-Control-Allow-Origin", options.allowedOrigins.join(", "));
+          }
+          if (options.allowedMethods.length > 0) {
+            response.headers.set("Access-Control-Allow-Methods", options.allowedMethods.join(", "));
+          }
+          if (options.allowedHeaders.length > 0) {
+            response.headers.set("Access-Control-Allow-Headers", options.allowedHeaders.join(", "));
+          }
+          if (options.allowCredentials) {
+            response.headers.set("Access-Control-Allow-Credentials", `${options.allowCredentials}`);
+          }
+          return response;
+        },
+      },
+      origins: {
+        url: async () => {
+          originCalls += 1;
+          return new Response("origin", { status: 200 });
+        },
+      },
+    },
+  );
+
+  const response = await executeGatewayRequest(
+    gateway,
+    new Request("https://gateway.example.com/udemy/v2/api/admin/verify", {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://localhost:3000",
+        "access-control-request-method": "GET",
+        "access-control-request-headers": "x-admin-key",
+      },
+    }),
+    { ANALYTICS_ENABLED: "false", GATEWAY_NAME: "test-gateway" },
+    ctx,
+    {
+      logEvent: (event) => {
+        logs.push({
+          stage: event.stage,
+          outcome: event.outcome,
+          routePath: event.routePath,
+          status: event.status,
+        });
+      },
+    },
+  );
+
+  await flush();
+
+  assert.equal(originCalls, 0);
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get("Access-Control-Allow-Origin"), "http://localhost:3000");
+  assert.equal(response.headers.get("Access-Control-Allow-Methods"), "GET, POST, PUT, DELETE, OPTIONS");
+  assert.equal(response.headers.get("Access-Control-Allow-Headers"), "x-admin-key");
+  assert.equal(response.headers.get("Access-Control-Allow-Credentials"), "true");
+  assert.deepEqual(
+    logs.map((log) => [log.stage, log.outcome, log.routePath ?? null, log.status ?? null]),
+    [
+      ["request_received", "received", null, null],
+      ["route_resolution", "matched", "/udemy/v2/api/", null],
+      ["response_policy", "applied", "/udemy/v2/api/", 204],
+      ["response_finalization", "completed", null, 204],
     ],
   );
 });

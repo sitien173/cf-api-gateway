@@ -14,11 +14,12 @@ const defaultNow = () => Date.now();
 const resolveRoute = (
   gateway: CompiledGateway,
   request: Request,
+  methodOverride?: string,
 ): CompiledRoute | undefined => {
   const requestUrl = new URL(request.url);
-
+  const requestMethod = methodOverride ?? request.method;
   return gateway.routes.find((route) => {
-    if (route.method !== request.method) {
+    if (route.method !== requestMethod) {
       return false;
     }
 
@@ -39,7 +40,7 @@ const applyResponsePolicies = async (
   let currentResponse = response;
 
   for (const policy of route.responsePolicies) {
-    const result = await policy.handler(currentResponse, policy.options);
+    const result = await policy.handler(currentResponse, policy.options, request);
     if (result instanceof Response) {
       currentResponse = result;
     }
@@ -55,6 +56,22 @@ const applyResponsePolicies = async (
   }
 
   return currentResponse;
+};
+
+const resolvePreflightRoute = (
+  gateway: CompiledGateway,
+  request: Request,
+): CompiledRoute | undefined => {
+  if (request.method !== "OPTIONS") {
+    return undefined;
+  }
+
+  const requestedMethod = request.headers.get("access-control-request-method");
+  if (!requestedMethod) {
+    return undefined;
+  }
+
+  return resolveRoute(gateway, request, requestedMethod);
 };
 
 const finalizeResponse = (
@@ -108,7 +125,9 @@ export const executeGatewayRequest = async (
       ...createLogContext(originalRequest),
     });
 
-    const route = resolveRoute(gateway, originalRequest);
+    const route =
+      resolvePreflightRoute(gateway, originalRequest) ??
+      resolveRoute(gateway, originalRequest);
 
     if (!route) {
       emitGatewayLog(dependencies.logEvent, {
@@ -135,6 +154,24 @@ export const executeGatewayRequest = async (
       outcome: "matched",
       ...createLogContext(originalRequest, route),
     });
+
+    if (originalRequest.method === "OPTIONS") {
+      const preflightResponse = await applyResponsePolicies(
+        route,
+        new Response(null, { status: 204 }),
+        originalRequest,
+        dependencies,
+      );
+
+      return finalizeResponse(
+        originalRequest,
+        preflightResponse,
+        env,
+        ctx,
+        dependencies,
+        latencyStart,
+      );
+    }
 
     let modifiedRequest: IRequest = originalRequest;
 

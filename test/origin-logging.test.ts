@@ -9,6 +9,7 @@ type LoggedEvent = {
   status?: number;
   targetUrl?: string;
   errorMessage?: string;
+  headers?: Record<string, string>;
 };
 
 const withCapturedConsole = async (
@@ -148,16 +149,113 @@ test("url origin logs structured request failure details", async () => {
 
   try {
     await withCapturedConsole(async (logs) => {
-      const response = await url(new Request("https://gateway.example.com/orders"), {
+      const response = await url(new Request("https://gateway.example.com/orders", {
+        headers: {
+          authorization: "Bearer secret-token",
+          "x-device-id": "device-456",
+          "x-license-key": "secret-license-key",
+        },
+      }), {
         url: "https://origin.example.com/orders",
       });
 
       assert.equal(response.status, 500);
       assert.deepEqual(
-        logs.error.map((event) => [event.stage, event.outcome, event.errorMessage, event.targetUrl]),
-        [["origin", "request_failed", "network down", "https://origin.example.com/orders"]],
+        logs.error.map((event) => [event.stage, event.outcome, event.errorMessage, event.targetUrl, JSON.stringify(event.headers ?? {})]),
+        [[
+          "origin",
+          "request_failed",
+          "network down",
+          "https://origin.example.com/orders",
+          JSON.stringify({
+            authorization: "[REDACTED]",
+            "x-device-id": "device-456",
+            "x-license-key": "[REDACTED]",
+          }),
+        ]],
       );
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("url origin preserves the incoming query string for fixed upstream paths", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = "";
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    capturedUrl =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    return new Response("ok", { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    await withCapturedConsole(async (logs) => {
+      const response = await url(
+        new Request(
+          "https://gateway.example.com/udemy/v2?key=abc&device=xyz",
+        ),
+        {
+          url: "https://origin.example.com/cookies",
+          pathRewrite: "/udemy/v2",
+        } as any,
+      );
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(
+        logs.info.map((event) => [event.stage, event.outcome, event.status, event.targetUrl]),
+        [
+          ["origin", "started", undefined, "https://origin.example.com/cookies?key=abc&device=xyz"],
+          ["origin", "completed", 200, "https://origin.example.com/cookies?key=abc&device=xyz"],
+        ],
+      );
+    });
+    assert.equal(
+      capturedUrl,
+      "https://origin.example.com/cookies?key=abc&device=xyz",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("url origin applies pathRewrite when forwarding to a root upstream URL", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = "";
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    capturedUrl =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    return new Response("ok", { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const response = await url(
+      new Request(
+        "https://gateway.example.com/udemy/v2/api/public/udemy-base-url?key=abc",
+      ),
+      {
+        url: "https://origin.example.com",
+        pathRewrite: "/udemy/v2",
+      } as any,
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(
+      capturedUrl,
+      "https://origin.example.com/api/public/udemy-base-url?key=abc",
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

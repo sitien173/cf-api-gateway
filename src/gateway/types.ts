@@ -1,5 +1,4 @@
 import type {
-  IRequest,
   TOriginHandler,
   TRequestPolicyHandler,
   TResponsePolicyHandler,
@@ -87,6 +86,9 @@ export type GatewayLogEvent = {
   outcome: string;
   method: string;
   path: string;
+  query: string;
+  params: Record<string, string>;
+  headers: Record<string, string>;
   routePath?: string;
   routeMethod?: string;
   originType?: string;

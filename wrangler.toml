@@ -5,7 +5,7 @@
 ## one, but with custom configuration values for each different gateway.
 ## The values shown here are just an example for testing purposes.
 
-name = "api-gateway" # usually the name of the gateway for each user
+name = "cf-api-gateway" # usually the name of the gateway for each user
 main = "src/index.ts"
 compatibility_date = "2026-03-13"
 compatibility_flags = ["nodejs_compat"]
@@ -15,7 +15,7 @@ analytics_engine_datasets = [
 ]
 
 [vars] # local testing stuff, the production values are set from the API server
-GATEWAY_NAME = "api-gateway"
+GATEWAY_NAME = "cf-api-gateway"
 ANALYTICS_ENABLED = "true"
 
 [observability]

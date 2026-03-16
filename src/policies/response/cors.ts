@@ -4,29 +4,73 @@ type CorsOptions = {
   allowedOrigins: string[];
   allowedMethods: string[];
   allowedHeaders: string[];
-  exposedHeaders: string[];
-  maxAge: number;
+  exposedHeaders?: string[];
+  maxAge?: number;
   allowCredentials: boolean;
+};
+
+const findAllowedOrigin = (
+  request: Request | undefined,
+  allowedOrigins: string[],
+): string | null => {
+  if (allowedOrigins.includes("*")) {
+    return "*";
+  }
+
+  const requestOrigin = request?.headers.get("origin");
+  if (!requestOrigin) {
+    return null;
+  }
+
+  if (allowedOrigins.includes(requestOrigin)) {
+    return requestOrigin;
+  }
+
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(requestOrigin);
+  } catch {
+    return null;
+  }
+
+  const requestHostname = requestUrl.hostname.toLowerCase();
+
+  for (const allowedOrigin of allowedOrigins) {
+    if (!allowedOrigin.startsWith("*.")) {
+      continue;
+    }
+
+    const suffix = allowedOrigin.slice(2).toLowerCase();
+    if (requestHostname !== suffix && requestHostname.endsWith(`.${suffix}`)) {
+      return requestOrigin;
+    }
+  }
+
+  return null;
 };
 
 export const cors: TResponsePolicyHandler = (
   response: Response,
-  options: CorsOptions
+  options: CorsOptions,
+  request?: Request,
 ) => {
   const {
     allowedOrigins,
     allowedMethods,
     allowedHeaders,
-    exposedHeaders,
+    exposedHeaders = [],
     maxAge,
     allowCredentials,
   } = options;
 
-  if (allowedOrigins.length > 0) {
-    response.headers.set(
-      "Access-Control-Allow-Origin",
-      allowedOrigins.join(", ")
-    );
+  const allowedOrigin = findAllowedOrigin(request, allowedOrigins);
+
+  if (allowedOrigin) {
+    response.headers.set("Access-Control-Allow-Origin", allowedOrigin);
+
+    if (allowedOrigin !== "*") {
+      response.headers.append("Vary", "Origin");
+    }
   }
 
   if (allowedMethods.length > 0) {

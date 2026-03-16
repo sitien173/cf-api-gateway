@@ -14,7 +14,8 @@ export type TRequestPolicyHandler = (
 
 export type TResponsePolicyHandler = (
   response: Response,
-  options: any
+  options: any,
+  request?: IRequest
 ) => void | Response | Promise<void | Response>;
 
 export type TPolicyName = string;
