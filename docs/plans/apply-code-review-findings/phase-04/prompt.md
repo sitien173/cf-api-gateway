@@ -17,6 +17,8 @@ Require Auth0 JWT authentication on every mutation route.
 
 Read `AUTH0_ISSUER` and `AUTH0_AUDIENCE` only from Worker bindings. Missing bindings return 500; missing or invalid tokens return 401. Valid tokens reach the selected origin. Treat GET, HEAD, and OPTIONS as public/safe. Compilation must reject every other configured method without Auth0 JWT. Do not commit deployment values.
 
+Pass the environment as the third request-policy handler argument. Normalize valid issuer URLs and cache remote JWK resolvers by normalized JWKS URL. Enforce the configured policy type `auth0jwt`, not its name. Keep generated Wrangler types unchanged because Auth0 secrets are not declared in `wrangler.toml`; use authored source types and document `wrangler secret put`. The empty-request audit is informational because public GET routes remain empty.
+
 ## Files
 
 - `src/types/index.ts`
