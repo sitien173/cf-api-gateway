@@ -83,6 +83,9 @@ The plan covers tooling, CI, generated artifacts, logging, analytics, failover, 
 - Modify: `src/gateway/types.ts`
 - Modify: `src/services/analytics.ts`
 - Modify: `src/index.ts`
+- Modify: `src/origins/url.ts`
+- Modify: `src/origins/proxyAll.ts`
+- Modify: `src/origins/upstreamWithFallback.ts`
 - Modify: `test/gateway-pipeline.test.ts`
 - Modify: `test/origin-logging.test.ts`
 - Create: `test/analytics.test.ts`
@@ -116,7 +119,7 @@ The plan covers tooling, CI, generated artifacts, logging, analytics, failover, 
 - `npm test`
 - `npm run typecheck`
 - `npm run bundle`
-- `tgrep -n -e 'query' -e 'params' -e 'headers' -e 'targetUrl' src/gateway src/origins src/services`
+- `tgrep -n -e 'targetUrl' -e 'errorMessage' src/gateway src/origins src/services`
 - `git diff --check`
 
 **Commit:** `fix(observability): remove secrets and write analytics`

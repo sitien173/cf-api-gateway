@@ -17,6 +17,8 @@ Remove sensitive telemetry and restore Analytics Engine writes.
 
 `src/gateway/logging.ts` currently records request paths, queries, parameters, headers, and raw error messages. `src/gateway/runtime.ts` emits those fields through every lifecycle event. `src/services/analytics.ts` clones and reads response bodies but writes no Analytics Engine datapoints. Preserve the documented Analytics Engine column positions: `index1` gateway name, `blob1` matched route template, `blob2` method, `double1` status, and `double2` latency milliseconds. Route misses require one fixed route label. Analytics failures must remain background failures through `ctx.waitUntil`.
 
+Use a typed analytics metadata event rather than passing a Request or Response to analytics. Remove forbidden telemetry fields from `GatewayLogEvent` so future leakage is a type error. Do not require internal forwarding variables to disappear; audit only log-event fields and construction. Origin handlers also emit forbidden fields, so update their log calls without changing their routing behavior.
+
 ## Files
 
 - `src/gateway/logging.ts`
@@ -24,6 +26,9 @@ Remove sensitive telemetry and restore Analytics Engine writes.
 - `src/gateway/types.ts`
 - `src/services/analytics.ts`
 - `src/index.ts`
+- `src/origins/url.ts`
+- `src/origins/proxyAll.ts`
+- `src/origins/upstreamWithFallback.ts`
 - `test/gateway-pipeline.test.ts`
 - `test/origin-logging.test.ts`
 - `test/analytics.test.ts`
@@ -42,7 +47,7 @@ Remove sensitive telemetry and restore Analytics Engine writes.
 - `npm test`
 - `npm run typecheck`
 - `npm run bundle`
-- `tgrep -n -e 'query' -e 'params' -e 'headers' -e 'targetUrl' src/gateway src/origins src/services`
+- `tgrep -n -e 'targetUrl' -e 'errorMessage' src/gateway src/origins src/services`
 - `git diff --check`
 
 ## Rules
