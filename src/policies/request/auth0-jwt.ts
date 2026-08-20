@@ -14,7 +14,7 @@ const remoteJwkSets = new Map<string, RemoteJwkSet>();
 const normalizeIssuer = (value: string): NormalizedIssuer | undefined => {
   try {
     const issuerUrl = new URL(value);
-    if (issuerUrl.protocol !== "https:" && issuerUrl.protocol !== "http:") {
+    if (issuerUrl.protocol !== "https:") {
       return undefined;
     }
 

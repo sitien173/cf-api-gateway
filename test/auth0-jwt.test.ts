@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { EventEmitter } from "node:events";
+import { createRequire } from "node:module";
+import { Readable } from "node:stream";
 import * as jose from "jose";
 
 import { compileGateway, executeGatewayRequest } from "../src/gateway/index.ts";
@@ -8,6 +10,8 @@ import { auth0jwt } from "../src/policies/request/auth0-jwt.ts";
 
 const issuer = "https://tenant.example.com/";
 const audience = "https://api.example.com";
+const nodeRequire = createRequire(import.meta.url);
+const https = nodeRequire("https") as typeof import("node:https");
 
 const createTokenFixture = async (tokenIssuer = issuer) => {
   const { privateKey, publicKey } = await jose.generateKeyPair("RS256");
@@ -22,6 +26,7 @@ const createTokenFixture = async (tokenIssuer = issuer) => {
 
   return {
     token,
+    publicKey,
     jwks: { keys: [{ ...jwk, alg: "RS256", kid, use: "sig" }] },
   };
 };
@@ -31,31 +36,29 @@ const createContext = () => ({
   passThroughOnException() {},
 } as ExecutionContext);
 
-const createJwksServer = async () => {
-  let jwks = { keys: [] };
-  let requests = 0;
-  const server = createServer((_request, response) => {
-    requests += 1;
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify(jwks));
-  });
+const withMockedJwks = async <T>(
+  jwks: { keys: jose.JWK[] },
+  run: (resolverCalls: () => number) => Promise<T>,
+): Promise<T> => {
+  const originalGet = https.get;
+  let resolverCalls = 0;
+  https.get = (() => {
+    resolverCalls += 1;
+    const request = new EventEmitter() as import("node:http").ClientRequest;
+    request.destroy = () => request;
+    setImmediate(() => {
+      const response = Readable.from([Buffer.from(JSON.stringify(jwks))]) as import("node:http").IncomingMessage;
+      response.statusCode = 200;
+      request.emit("response", response);
+    });
+    return request;
+  }) as typeof https.get;
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Unable to start JWKS server");
+  try {
+    return await run(() => resolverCalls);
+  } finally {
+    https.get = originalGet;
   }
-
-  return {
-    issuer: `http://127.0.0.1:${address.port}/`,
-    setJwks(value: { keys: object[] }) {
-      jwks = value;
-    },
-    requestCount: () => requests,
-    async close() {
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    },
-  };
 };
 
 test("auth0jwt returns 500 when Auth0 bindings are missing", async () => {
@@ -65,6 +68,18 @@ test("auth0jwt returns 500 when Auth0 bindings are missing", async () => {
     }),
     {},
     {},
+  );
+
+  assert.equal(response.status, 500);
+});
+
+test("auth0jwt rejects HTTP issuer configuration", async () => {
+  const response = await auth0jwt(
+    new Request("https://gateway.example.com/orders", {
+      headers: { authorization: "Bearer token" },
+    }),
+    {},
+    { AUTH0_ISSUER: "http://tenant.example.com/", AUTH0_AUDIENCE: audience },
   );
 
   assert.equal(response.status, 500);
@@ -87,33 +102,30 @@ test("auth0jwt returns 401 for missing and invalid bearer tokens", async () => {
 });
 
 test("auth0jwt caches JWK resolvers by normalized JWKS URL", async () => {
-  const server = await createJwksServer();
-  const fixture = await createTokenFixture(server.issuer);
-  server.setJwks(fixture.jwks);
-
-  try {
+  const cacheIssuer = "https://cache-tenant.example.com/";
+  const fixture = await createTokenFixture(cacheIssuer);
+  await withMockedJwks(fixture.jwks, async (resolverCalls) => {
     const first = await auth0jwt(
       new Request("https://gateway.example.com/orders", {
         headers: { authorization: `Bearer ${fixture.token}` },
       }),
       {},
-      { AUTH0_ISSUER: server.issuer.slice(0, -1), AUTH0_AUDIENCE: audience },
+      { AUTH0_ISSUER: cacheIssuer.slice(0, -1), AUTH0_AUDIENCE: audience },
     );
+    assert.equal(resolverCalls(), 1);
     const second = await auth0jwt(
       new Request("https://gateway.example.com/orders", {
         headers: { authorization: `Bearer ${fixture.token}` },
       }),
       {},
-      { AUTH0_ISSUER: server.issuer, AUTH0_AUDIENCE: audience },
+      { AUTH0_ISSUER: cacheIssuer, AUTH0_AUDIENCE: audience },
     );
 
     assert.equal(first instanceof Request, true);
     assert.equal(second instanceof Request, true);
     assert.equal((first as Request & { user?: string }).user, "user-123");
-    assert.equal(server.requestCount(), 1);
-  } finally {
-    await server.close();
-  }
+    assert.equal(resolverCalls(), 1);
+  });
 });
 
 test("request policies receive the Worker environment", async () => {
@@ -186,12 +198,11 @@ test("unsafe routes require a policy configured with type auth0jwt", () => {
 });
 
 test("valid Auth0 tokens reach mutation origins while OPTIONS stays public", async () => {
-  const server = await createJwksServer();
-  const fixture = await createTokenFixture(server.issuer);
-  server.setJwks(fixture.jwks);
+  const validIssuer = "https://valid-tenant.example.com/";
+  const fixture = await createTokenFixture(validIssuer);
   let originCalls = 0;
 
-  try {
+  await withMockedJwks(fixture.jwks, async () => {
     const gateway = compileGateway(
       {
         policies: [{ name: "require-auth", type: "auth0jwt" }],
@@ -220,7 +231,7 @@ test("valid Auth0 tokens reach mutation origins while OPTIONS stays public", asy
       },
     );
     const env = {
-      AUTH0_ISSUER: server.issuer,
+      AUTH0_ISSUER: validIssuer,
       AUTH0_AUDIENCE: audience,
     };
 
@@ -253,7 +264,5 @@ test("valid Auth0 tokens reach mutation origins while OPTIONS stays public", asy
     assert.equal(authenticated.status, 200);
     assert.equal(preflight.status, 204);
     assert.equal(originCalls, 1);
-  } finally {
-    await server.close();
-  }
+  });
 });
