@@ -25,6 +25,7 @@ Context7 confirmed `/privatenumber/tsx` supports `tsx --test`. Resolve current o
 - `package-lock.json`
 - `.gitignore`
 - `README.md`
+- `worker-configuration.d.ts`
 - `.github/workflows/ci.yml`
 - `dist/README.md`
 - `dist/index.js`

@@ -29,6 +29,7 @@ The plan covers tooling, CI, generated artifacts, logging, analytics, failover, 
 - Modify: `package-lock.json`
 - Modify: `.gitignore`
 - Modify: `README.md`
+- Modify: `worker-configuration.d.ts`
 - Create: `.github/workflows/ci.yml`
 - Delete: `dist/README.md`
 - Delete: `dist/index.js`

@@ -56,7 +56,7 @@ Edit `src/config.json` with your URLs:
 ### 3. Deploy
 
 ```bash
-npx wrangler deploy
+npm run deploy
 ```
 
 That's it! Your gateway is now live at `https://api-gateway.YOUR-SUBDOMAIN.workers.dev`
@@ -201,11 +201,27 @@ Apply to routes:
 
 ## Testing & Monitoring
 
+### Quality Gates
+
+Run the reproducible checks locally before opening a pull request:
+
+```bash
+npm ci
+npm run check
+npm run types:check
+npm audit --audit-level=high
+npm run bundle
+```
+
+`npm run bundle` creates a dry-run bundle in `dist/`. The directory is an ignored
+build artifact: Wrangler deploys `src/index.ts` directly, so generated bundles
+must not be committed.
+
 ### Local Testing
 
 ```bash
 # Start local server
-npx wrangler dev --local
+npm run start -- --local
 
 # Test endpoint
 curl http://localhost:8787/udemy/api/health
@@ -265,7 +281,7 @@ ANALYTICS_ENABLED = "true"
 ### 2. Deploy
 
 ```bash
-npx wrangler deploy
+npm run deploy
 ```
 
 ### 3. View Analytics
@@ -338,7 +354,7 @@ let baseURL = "https://api-gateway.YOUR-SUBDOMAIN.workers.dev/udemy"
 **Impact**: None (compile-time only)  
 **Fix**:
 ```bash
-npx wrangler types
+npm run types
 ```
 
 ---
