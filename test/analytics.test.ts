@@ -20,6 +20,45 @@ const createDataset = () => {
   };
 };
 
+const createResponseGateway = () =>
+  compileGateway(
+    {
+      policies: [],
+      routes: [
+        {
+          path: "/api/orders",
+          method: "GET",
+          origin: { type: "url", options: {} },
+          policies: { request: [], response: [] },
+        },
+      ],
+    },
+    {
+      requestPolicies: {},
+      responsePolicies: {},
+      origins: { url: async () => new Response("ok", { status: 200 }) },
+    },
+  );
+
+type BackgroundContext = {
+  ctx: ExecutionContext;
+  pending: Promise<unknown>[];
+};
+
+const createBackgroundContext = (): BackgroundContext => {
+  const pending: Promise<unknown>[] = [];
+
+  return {
+    pending,
+    ctx: {
+      waitUntil(promise: Promise<unknown>) {
+        pending.push(promise);
+      },
+      passThroughOnException() {},
+    } as ExecutionContext,
+  };
+};
+
 test("logAnalytics writes the documented Analytics Engine datapoint layout", async () => {
   const dataset = createDataset();
 
@@ -60,24 +99,7 @@ test("each gateway response creates one datapoint and route misses use a fixed l
     ANALYTICS_ENABLED: "true",
     API_ANALYTICS: dataset,
   };
-  const gateway = compileGateway(
-    {
-      policies: [],
-      routes: [
-        {
-          path: "/api/orders",
-          method: "GET",
-          origin: { type: "url", options: {} },
-          policies: { request: [], response: [] },
-        },
-      ],
-    },
-    {
-      requestPolicies: {},
-      responsePolicies: {},
-      origins: { url: async () => new Response("ok", { status: 200 }) },
-    },
-  );
+  const gateway = createResponseGateway();
 
   await executeGatewayRequest(
     gateway,
@@ -109,4 +131,47 @@ test("each gateway response creates one datapoint and route misses use a fixed l
     ["route_miss", "GET"],
   ]);
   assert.deepEqual(dataset.points.map((point) => point.doubles?.[0]), [200, 404]);
+});
+
+test("analytics failures stay in the background and preserve the response", async () => {
+  const failures = [
+    {
+      name: "synchronous throw",
+      createLogger: (datapoints: unknown[]) => (_event: unknown, _env: unknown) => {
+        datapoints.push(_event);
+        throw new Error("sync analytics failure");
+      },
+    },
+    {
+      name: "rejected promise",
+      createLogger: (datapoints: unknown[]) => async (_event: unknown, _env: unknown) => {
+        datapoints.push(_event);
+        throw new Error("async analytics failure");
+      },
+    },
+  ];
+
+  for (const failure of failures) {
+    const datapoints: unknown[] = [];
+    const { ctx, pending } = createBackgroundContext();
+    const logs: { stage: string; outcome: string }[] = [];
+
+    const response = await executeGatewayRequest(
+      createResponseGateway(),
+      new Request("https://gateway.example.com/api/orders"),
+      {},
+      ctx,
+      {
+        logAnalytics: failure.createLogger(datapoints),
+        logEvent: (event) => logs.push({ stage: event.stage, outcome: event.outcome }),
+      },
+    );
+
+    assert.equal(response.status, 200, failure.name);
+    const results = await Promise.allSettled(pending);
+    assert.equal(results.length, 1, failure.name);
+    assert.equal(results[0].status, "rejected", failure.name);
+    assert.equal(datapoints.length, 1, failure.name);
+    assert.equal(logs.some((log) => log.stage === "execution"), false, failure.name);
+  }
 });

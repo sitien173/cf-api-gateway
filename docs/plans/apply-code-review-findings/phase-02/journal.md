@@ -11,7 +11,7 @@
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-08-20T14:30:00+07:00
-- Finished: 2026-08-20T14:54:36+07:00
+- Finished: 2026-08-20T14:59:24+07:00
 
 ## Implementation Response
 
@@ -40,6 +40,27 @@ Hardened gateway and origin telemetry to metadata-only events and restored typed
 - phase-02/notes.md  (## Task 1, ## Task 2, ## Task 3, ## Task 4)
 ## SPEC COMPLIANCE
 - Meets Spec? YES — telemetry is metadata-only, Analytics Engine positions are preserved, and all verification checks pass.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase 2 telemetry follow-up / Started 2026-08-20T14:57:54+07:00 / Finished 2026-08-20T14:59:24+07:00 / Plan dir docs/plans/apply-code-review-findings/phase-02
+## SUMMARY
+Scheduled analytics callbacks through a microtask-backed background promise so synchronous throws and rejections cannot replace the HTTP response or duplicate analytics work.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| modified | src/gateway/runtime.ts | Deferred analytics callback invocation with `Promise.resolve().then(...)`. |
+| modified | test/analytics.test.ts | Added synchronous-throw and rejected-promise response-preservation regressions. |
+| modified | docs/plans/apply-code-review-findings/phase-02/notes.md | Recorded follow-up fix decisions and evidence. |
+| modified | docs/plans/apply-code-review-findings/phase-02/journal.md | Recorded this follow-up response. |
+## NOTES
+- phase-02/notes.md  (## Follow-up Fix)
+## SPEC COMPLIANCE
+- Meets Spec? YES — analytics failures remain background failures and the requested verification commands pass.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

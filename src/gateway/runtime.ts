@@ -86,7 +86,8 @@ const finalizeResponse = (
 ): Response => {
   const latency = (dependencies.now ?? defaultNow)() - latencyStart;
 
-  if (dependencies.logAnalytics) {
+  const logAnalytics = dependencies.logAnalytics;
+  if (logAnalytics) {
     emitGatewayLog(dependencies.logEvent, {
       level: "info",
       stage: "analytics",
@@ -95,16 +96,14 @@ const finalizeResponse = (
       status: response.status,
       latencyMs: latency,
     });
+    const analyticsEvent = {
+      routePath: route?.path ?? analyticsRouteMissLabel,
+      method: request.method,
+      status: response.status,
+      latencyMs: latency,
+    };
     ctx.waitUntil(
-      dependencies.logAnalytics(
-        {
-          routePath: route?.path ?? analyticsRouteMissLabel,
-          method: request.method,
-          status: response.status,
-          latencyMs: latency,
-        },
-        env,
-      ),
+      Promise.resolve().then(() => logAnalytics(analyticsEvent, env)),
     );
   }
 

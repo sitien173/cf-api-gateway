@@ -83,3 +83,23 @@
 
 ### Test evidence
 - RED -> GREEN: `npm test` passes all 16 tests, including exactly one datapoint per tested response and the fixed route-miss label. `npm run bundle` succeeds.
+
+## Follow-up Fix
+
+### Decisions made
+- Wrapped the analytics callback in `Promise.resolve().then(...)` before passing it to `ctx.waitUntil`, converting synchronous throws into background rejections.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- Background analytics failures remain rejected promises for the platform lifecycle, while the gateway response is returned unchanged.
+
+### Assumptions
+- `ctx.waitUntil` accepts the scheduled promise even when it later rejects.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Added synchronous-throw and rejected-promise regression cases; both preserve the HTTP 200 response, schedule exactly one analytics invocation, and avoid the gateway execution-catch path. Final checks: 17 tests pass, typecheck passes, bundle succeeds, and `git diff --check` passes.
