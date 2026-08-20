@@ -69,7 +69,13 @@ export const checkUpstreamHealth = async (
       signal: controller.signal,
       redirect: "manual",
     });
-    return response.ok;
+    const healthy = response.ok;
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Health status is already determined; body cleanup must not change it.
+    }
+    return healthy;
   } catch {
     return false;
   } finally {
@@ -130,7 +136,11 @@ export const executeFailover = async ({
       return wrapResponse(new Response(firstResponse.body, firstResponse));
     }
 
-    await firstResponse.body?.cancel();
+    try {
+      await firstResponse.body?.cancel();
+    } catch {
+      // A failed cancellation must not prevent the single safe retry.
+    }
     onFallbackStarted?.();
 
     let fallbackResponse: Response;

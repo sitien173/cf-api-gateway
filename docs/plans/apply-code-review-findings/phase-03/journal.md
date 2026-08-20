@@ -11,7 +11,7 @@
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-08-20T15:00:00+07:00
-- Finished: 2026-08-20T15:14:23+07:00
+- Finished: 2026-08-20T15:19:44+07:00
 
 ## Implementation Response
 
@@ -33,6 +33,27 @@ Consolidated both failover handlers onto a shared executor that prevents mutatio
 - phase-03/notes.md  (## Task 1, ## Task 2, ## Task 3, ## Task 4)
 ## SPEC COMPLIANCE
 - Meets Spec? YES — all requested failover behavior and verification checks pass.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase 3 telemetry follow-up / Started 2026-08-20T15:18:37+07:00 / Finished 2026-08-20T15:19:44+07:00 / Plan dir docs/plans/apply-code-review-findings/phase-03
+## SUMMARY
+Made abandoned-response and health-check body cleanup best-effort while preserving safe fallback, timer, and cache behavior.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| modified | src/origins/failover.ts | Tolerated rejected primary cancellation and canceled health-check response bodies. |
+| modified | test/origin-failover.test.ts | Added cancellation and health-body cleanup regressions. |
+| modified | docs/plans/apply-code-review-findings/phase-03/notes.md | Recorded follow-up decisions and evidence. |
+| modified | docs/plans/apply-code-review-findings/phase-03/journal.md | Recorded this follow-up response. |
+## NOTES
+- phase-03/notes.md  (## Follow-up Fix)
+## SPEC COMPLIANCE
+- Meets Spec? YES — all requested regressions and verification commands pass.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { proxyAll, upstreamWithFallback } from "../src/origins/index.ts";
-import { executeFailover } from "../src/origins/failover.ts";
+import { checkUpstreamHealth, executeFailover } from "../src/origins/failover.ts";
 
 const mutationScenarios = [
   {
@@ -14,6 +14,76 @@ const mutationScenarios = [
     response: undefined,
   },
 ];
+
+test("a rejected primary body cancellation does not prevent one GET fallback", async () => {
+  const originalFetch = globalThis.fetch;
+  const primaryUrl = "https://cancel-primary.example.com/orders";
+  const fallbackUrl = "https://cancel-fallback.example.com/orders";
+  let cancellationAttempts = 0;
+  let fallbackAttempts = 0;
+  const primaryBody = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancellationAttempts += 1;
+      return Promise.reject(new Error("body cancellation failed"));
+    },
+  });
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const request = input instanceof Request ? input : new Request(input);
+    if (request.url === primaryUrl) {
+      return new Response(primaryBody, { status: 503 });
+    }
+    if (request.url === fallbackUrl) {
+      fallbackAttempts += 1;
+      return new Response("fallback", { status: 200 });
+    }
+    throw new Error(`unexpected request: ${request.url}`);
+  }) as typeof fetch;
+
+  try {
+    const response = await executeFailover({
+      request: new Request("https://gateway.example.com/orders"),
+      primaryUrl,
+      fallbackUrl,
+      primaryHealthy: true,
+      wrapResponse: (result) => result,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(cancellationAttempts, 1);
+    assert.equal(fallbackAttempts, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("health checks release response bodies after evaluating ok", async () => {
+  const originalFetch = globalThis.fetch;
+  const statuses = [200, 503];
+
+  try {
+    for (const status of statuses) {
+      let cancellationAttempts = 0;
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          cancellationAttempts += 1;
+        },
+      });
+      globalThis.fetch = (async () => new Response(body, { status })) as typeof fetch;
+
+      const healthy = await checkUpstreamHealth(
+        `https://health-body-${status}.example.com`,
+        "/api/health",
+        5000,
+      );
+
+      assert.equal(healthy, status === 200);
+      assert.equal(cancellationAttempts, 1, `${status}`);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("proxyAll never replays mutation requests to fallback", async () => {
   for (const scenario of mutationScenarios) {

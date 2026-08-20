@@ -85,3 +85,24 @@
 
 ### Test evidence
 - RED -> GREEN: Timer cleanup, manual redirect, unhealthy-primary routing, and response-rewrite isolation regressions pass. Final verification: 23 tests pass, typecheck passes, bundle succeeds, and `git diff --check` passes.
+
+## Follow-up Fix
+
+### Decisions made
+- Treat abandoned-primary body cancellation as best-effort so a rejected cancellation cannot block the single GET/HEAD fallback.
+- Evaluate health status before canceling the health response body; cleanup failures do not alter health, timer, or cache behavior.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- Health-check bodies are not used after the `ok` status is evaluated.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Added regressions for rejected primary cancellation and health response cleanup. Both initially failed, then passed after the fix. Final verification: 25 tests pass, typecheck passes, bundle succeeds, and `git diff --check` passes.
