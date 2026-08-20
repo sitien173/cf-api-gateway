@@ -15,14 +15,18 @@ export const jsonBodyValidation: TRequestPolicyHandler = async (
     return new ErrorResponse("Request body is not valid JSON", 400);
   }
 
-  const validator = new Validator(options.schema);
+  try {
+    const validator = new Validator(options.schema);
+    const result = validator.validate(body);
+    if (result.errors.length === 0) {
+      return request;
+    }
 
-  const result = validator.validate(body);
-  if (result.errors.length > 0) {
     return new ErrorResponse(
-      "Could not validate body against schema. " + result.errors[0].error
+      "Could not validate body against schema. " + result.errors[0].error,
+      400,
     );
+  } catch {
+    return new ErrorResponse("Could not validate body against schema", 400);
   }
-
-  return request;
 };

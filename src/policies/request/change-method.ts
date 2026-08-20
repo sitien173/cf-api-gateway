@@ -19,13 +19,14 @@ export const changeMethod: TRequestPolicyHandler = async (
     user: request.user,
   };
 
-  if (options.method === "GET") {
+  if (options.method === "GET" || options.method === "HEAD") {
     initRequest.body = null;
     initRequest.headers.delete("Content-Type");
     initRequest.headers.delete("Content-Length");
   }
 
-  const newRequest = new Request(request.url, initRequest);
+  const newRequest = new Request(request.url, initRequest) as IRequest;
+  newRequest.user = request.user;
 
   return newRequest;
 };

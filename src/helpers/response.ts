@@ -1,11 +1,12 @@
 export class JsonResponse extends Response {
-  constructor(body: any, init?: ResponseInit) {
+  constructor(body: unknown, init?: ResponseInit) {
+    const headers = new Headers(init?.headers);
+    if (!headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
     super(JSON.stringify(body), {
-      headers: {
-        "Content-Type": "application/json",
-        ...init?.headers,
-      },
       ...init,
+      headers,
     });
   }
 }
