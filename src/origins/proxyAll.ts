@@ -1,5 +1,5 @@
 import { ErrorResponse } from "../helpers/response";
-import { createOriginLogContext, emitGatewayLog, toErrorMessage } from "../gateway/logging";
+import { createOriginLogContext, emitGatewayLog } from "../gateway/logging";
 import { IRequest, TOriginHandler } from "../types";
 
 type ProxyAllOptions = {
@@ -61,7 +61,6 @@ function rewriteLocation(
             stage: "origin_rewrite",
             outcome: "failed",
             ...createOriginLogContext(new Request(gatewayUrl.toString()), "proxyAll"),
-            errorMessage: toErrorMessage(e),
         });
         return location;
     }
@@ -93,8 +92,6 @@ async function checkUpstreamHealth(
             stage: "origin_health",
             outcome: "check_failed",
             ...createOriginLogContext(new Request(`https://health-check.local${healthPath}`), "proxyAll"),
-            targetUrl: `${baseUrl.replace(/\/$/, '')}${healthPath}`,
-            errorMessage: toErrorMessage(error),
         });
         return false;
     }
@@ -155,7 +152,6 @@ export const proxyAll: TOriginHandler = async (
             stage: "origin",
             outcome: "routed_primary",
             ...createOriginLogContext(request, "proxyAll"),
-            targetUrl,
         });
     } else {
         targetUrl = `${fallbackUrl.replace(/\/$/, '')}${pathAndQuery}`;
@@ -165,7 +161,6 @@ export const proxyAll: TOriginHandler = async (
             stage: "origin",
             outcome: "routed_fallback",
             ...createOriginLogContext(request, "proxyAll"),
-            targetUrl,
         });
     }
 
@@ -202,14 +197,12 @@ export const proxyAll: TOriginHandler = async (
                 outcome: "primary_failed",
                 ...createOriginLogContext(request, "proxyAll"),
                 status: upstreamResponse.status,
-                targetUrl,
             });
             emitGatewayLog(undefined, {
                 level: "info",
                 stage: "origin",
                 outcome: "fallback_started",
                 ...createOriginLogContext(request, "proxyAll"),
-                targetUrl: fallbackTargetUrl,
             });
             const fallbackHeaders = new Headers(request.headers);
             fallbackHeaders.delete('host');
@@ -237,7 +230,6 @@ export const proxyAll: TOriginHandler = async (
                 outcome: "fallback_completed",
                 ...createOriginLogContext(request, "proxyAll"),
                 status: fallbackResponse.status,
-                targetUrl: fallbackTargetUrl,
             });
 
             return new Response(fallbackResponse.body, {
@@ -264,8 +256,6 @@ export const proxyAll: TOriginHandler = async (
             stage: "origin",
             outcome: "request_failed",
             ...createOriginLogContext(request, "proxyAll"),
-            targetUrl,
-            errorMessage: toErrorMessage(error),
         });
 
         // If we were trying primary and it failed, try fallback
@@ -277,7 +267,6 @@ export const proxyAll: TOriginHandler = async (
                     stage: "origin",
                     outcome: "fallback_started",
                     ...createOriginLogContext(request, "proxyAll"),
-                    targetUrl: fallbackTargetUrl,
                 });
                 const fallbackHeaders = new Headers(request.headers);
                 fallbackHeaders.delete('host');
@@ -295,7 +284,6 @@ export const proxyAll: TOriginHandler = async (
                     outcome: "fallback_completed",
                     ...createOriginLogContext(request, "proxyAll"),
                     status: fallbackResponse.status,
-                    targetUrl: fallbackTargetUrl,
                 });
                 return new Response(fallbackResponse.body, fallbackResponse);
             } catch (fallbackError) {
@@ -304,7 +292,6 @@ export const proxyAll: TOriginHandler = async (
                     stage: "origin",
                     outcome: "fallback_failed",
                     ...createOriginLogContext(request, "proxyAll"),
-                    errorMessage: toErrorMessage(fallbackError),
                 });
             }
         }

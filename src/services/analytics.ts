@@ -1,21 +1,11 @@
-import { Env } from "..";
-
-type LogEvent = {
-  path: string;
-  method: string;
-  partialResponse: string;
-  status: number;
-  gatewayName: string;
-};
+import type { AnalyticsEvent, GatewayEnv } from "../gateway/types";
 
 export const logAnalytics = async (
-  req: Request,
-  res: Response,
-  env: Env,
-  latency: number
+  event: AnalyticsEvent,
+  env: GatewayEnv,
 ): Promise<void> => {
-  if (!env.GATEWAY_NAME) {
-    console.error("Environment variable for analytics is not set");
+  if (!env.GATEWAY_NAME || !env.API_ANALYTICS) {
+    console.error("Analytics Engine binding is not configured");
     return;
   }
 
@@ -24,16 +14,9 @@ export const logAnalytics = async (
     return;
   }
 
-  // Log analytics
-  const url = new URL(req.url);
-  const clonedResponse = res.clone();
-
-  const responseString = await clonedResponse.text();
-  const log: LogEvent = {
-    path: url.pathname,
-    method: req.method,
-    partialResponse: responseString.substring(0, 100),
-    status: res.status,
-    gatewayName: env.GATEWAY_NAME,
-  };
+  env.API_ANALYTICS.writeDataPoint({
+    indexes: [env.GATEWAY_NAME],
+    blobs: [event.routePath, event.method],
+    doubles: [event.status, event.latencyMs],
+  });
 };

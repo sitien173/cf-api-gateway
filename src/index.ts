@@ -9,6 +9,7 @@ import { IRequest } from "./types";
 export interface Env {
   GATEWAY_NAME?: string;
   ANALYTICS_ENABLED?: string;
+  API_ANALYTICS?: AnalyticsEngineDataset;
   [key: string]: any; // for analytics env
 }
 const gateway = compileGateway(config, {

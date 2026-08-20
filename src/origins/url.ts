@@ -1,5 +1,5 @@
 import { ErrorResponse } from "../helpers/response";
-import { createOriginLogContext, emitGatewayLog, toErrorMessage } from "../gateway/logging";
+import { createOriginLogContext, emitGatewayLog } from "../gateway/logging";
 import { IRequest, TOriginHandler } from "../types";
 
 type UrlOptions = {
@@ -47,7 +47,6 @@ export const url: TOriginHandler = async (
       stage: "origin",
       outcome: "started",
       ...createOriginLogContext(request, "url"),
-      targetUrl: originRequest.url,
     });
 
     const originFetch = await fetch(originRequest.url, originRequest);
@@ -58,7 +57,6 @@ export const url: TOriginHandler = async (
       outcome: "completed",
       ...createOriginLogContext(request, "url"),
       status: originFetch.status,
-      targetUrl: originRequest.url,
     });
 
     return new Response(originFetch.body, originFetch);
@@ -68,8 +66,6 @@ export const url: TOriginHandler = async (
       stage: "origin",
       outcome: "request_failed",
       ...createOriginLogContext(request, "url"),
-      targetUrl: originRequest.url,
-      errorMessage: toErrorMessage(err),
     });
     return new ErrorResponse("Origin request failed", 500);
   }

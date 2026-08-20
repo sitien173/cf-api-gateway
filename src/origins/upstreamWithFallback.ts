@@ -1,5 +1,5 @@
 import { ErrorResponse } from "../helpers/response";
-import { createOriginLogContext, emitGatewayLog, toErrorMessage } from "../gateway/logging";
+import { createOriginLogContext, emitGatewayLog } from "../gateway/logging";
 import { IRequest, TOriginHandler } from "../types";
 
 type HealthCheckResult = {
@@ -61,7 +61,6 @@ function rewriteLocation(
             stage: "origin_rewrite",
             outcome: "failed",
             ...createOriginLogContext(new Request(gatewayUrl.toString()), "upstreamWithFallback"),
-            errorMessage: toErrorMessage(e),
         });
         return location;
     }
@@ -93,8 +92,6 @@ async function checkUpstreamHealth(
             stage: "origin_health",
             outcome: "check_failed",
             ...createOriginLogContext(new Request(`https://health-check.local${healthPath}`), "upstreamWithFallback"),
-            targetUrl: `${baseUrl.replace(/\/$/, '')}${healthPath}`,
-            errorMessage: toErrorMessage(error),
         });
         return false;
     }
@@ -169,7 +166,6 @@ export const upstreamWithFallback: TOriginHandler = async (
             stage: "origin",
             outcome: "routed_primary",
             ...createOriginLogContext(request, "upstreamWithFallback"),
-            targetUrl,
         });
     } else {
         targetUrl = `${fallbackUrl.replace(/\/$/, '')}${pathAndQuery}`;
@@ -179,7 +175,6 @@ export const upstreamWithFallback: TOriginHandler = async (
             stage: "origin",
             outcome: "routed_fallback",
             ...createOriginLogContext(request, "upstreamWithFallback"),
-            targetUrl,
         });
     }
 
@@ -214,14 +209,12 @@ export const upstreamWithFallback: TOriginHandler = async (
                 outcome: "primary_failed",
                 ...createOriginLogContext(request, "upstreamWithFallback"),
                 status: upstreamResponse.status,
-                targetUrl,
             });
             emitGatewayLog(undefined, {
                 level: "info",
                 stage: "origin",
                 outcome: "fallback_started",
                 ...createOriginLogContext(request, "upstreamWithFallback"),
-                targetUrl: fallbackTargetUrl,
             });
             const fallbackHeaders = new Headers(request.headers);
             fallbackHeaders.delete('host');
@@ -249,7 +242,6 @@ export const upstreamWithFallback: TOriginHandler = async (
                 outcome: "fallback_completed",
                 ...createOriginLogContext(request, "upstreamWithFallback"),
                 status: fallbackResponse.status,
-                targetUrl: fallbackTargetUrl,
             });
 
             return new Response(fallbackResponse.body, {
@@ -276,8 +268,6 @@ export const upstreamWithFallback: TOriginHandler = async (
             stage: "origin",
             outcome: "request_failed",
             ...createOriginLogContext(request, "upstreamWithFallback"),
-            targetUrl,
-            errorMessage: toErrorMessage(error),
         });
 
         // If we were trying primary and it failed, try fallback
@@ -289,7 +279,6 @@ export const upstreamWithFallback: TOriginHandler = async (
                     stage: "origin",
                     outcome: "fallback_started",
                     ...createOriginLogContext(request, "upstreamWithFallback"),
-                    targetUrl: fallbackTargetUrl,
                 });
                 const fallbackHeaders = new Headers(request.headers);
                 fallbackHeaders.delete('host');
@@ -307,7 +296,6 @@ export const upstreamWithFallback: TOriginHandler = async (
                     outcome: "fallback_completed",
                     ...createOriginLogContext(request, "upstreamWithFallback"),
                     status: fallbackResponse.status,
-                    targetUrl: fallbackTargetUrl,
                 });
                 return new Response(fallbackResponse.body, fallbackResponse);
             } catch (fallbackError) {
@@ -316,7 +304,6 @@ export const upstreamWithFallback: TOriginHandler = async (
                     stage: "origin",
                     outcome: "fallback_failed",
                     ...createOriginLogContext(request, "upstreamWithFallback"),
-                    errorMessage: toErrorMessage(fallbackError),
                 });
             }
         }

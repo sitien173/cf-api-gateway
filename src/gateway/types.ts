@@ -7,6 +7,7 @@ import type {
 export type GatewayEnv = {
   GATEWAY_NAME?: string;
   ANALYTICS_ENABLED?: string;
+  API_ANALYTICS?: AnalyticsEngineDataset;
   [key: string]: any;
 };
 
@@ -71,11 +72,16 @@ export type CompiledGateway = {
   routes: CompiledRoute[];
 };
 
+export type AnalyticsEvent = {
+  routePath: string;
+  method: string;
+  status: number;
+  latencyMs: number;
+};
+
 export type AnalyticsLogger = (
-  request: Request,
-  response: Response,
+  event: AnalyticsEvent,
   env: GatewayEnv,
-  latency: number
 ) => Promise<void>;
 
 export type GatewayLogLevel = "info" | "error";
@@ -85,18 +91,12 @@ export type GatewayLogEvent = {
   stage: string;
   outcome: string;
   method: string;
-  path: string;
-  query: string;
-  params: Record<string, string>;
-  headers: Record<string, string>;
   routePath?: string;
   routeMethod?: string;
   originType?: string;
   policyName?: string;
   status?: number;
   latencyMs?: number;
-  targetUrl?: string;
-  errorMessage?: string;
 };
 
 export type GatewayLogger = (event: GatewayLogEvent) => void;

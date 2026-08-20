@@ -86,15 +86,7 @@ test("compileGateway resolves handlers and rejects unknown policy references", (
 test("executeGatewayRequest short-circuits when a request policy returns a response", async () => {
   let originCalls = 0;
   const analytics: Array<{ path: string; status: number; latency: number }> = [];
-  const logs: Array<{
-    stage: string;
-    outcome: string;
-    status?: number;
-    policyName?: string;
-    query?: string;
-    params?: Record<string, string>;
-    headers?: Record<string, string>;
-  }> = [];
+  const logs: Array<Record<string, unknown>> = [];
   const { ctx, flush } = createContext();
 
   const gateway = compileGateway(
@@ -150,21 +142,13 @@ test("executeGatewayRequest short-circuits when a request policy returns a respo
     {
       now: () => 100,
       logEvent: (event) => {
-        logs.push({
-          stage: event.stage,
-          outcome: event.outcome,
-          status: event.status,
-          policyName: event.policyName,
-          query: event.query,
-          params: event.params,
-          headers: event.headers,
-        });
+        logs.push(event);
       },
-      logAnalytics: async (request, finalResponse, _env, latency) => {
+      logAnalytics: async (event) => {
         analytics.push({
-          path: new URL(request.url).pathname,
-          status: finalResponse.status,
-          latency,
+          path: event.routePath,
+          status: event.status,
+          latency: event.latencyMs,
         });
       },
     },
@@ -176,29 +160,29 @@ test("executeGatewayRequest short-circuits when a request policy returns a respo
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "blocked");
   assert.deepEqual(analytics, [{ path: "/api/test", status: 401, latency: 0 }]);
-  assert.equal(logs[0].query, "?key=abc&device=xyz");
-  assert.deepEqual(logs[0].params, { key: "abc", device: "xyz" });
-  assert.deepEqual(logs[0].headers, {
-    "x-api-key": "[REDACTED]",
-    "x-device-id": "device-123",
-    "x-license-key": "[REDACTED]",
-  });
+  for (const log of logs) {
+    assert.equal("path" in log, false);
+    assert.equal("query" in log, false);
+    assert.equal("params" in log, false);
+    assert.equal("headers" in log, false);
+    assert.equal("targetUrl" in log, false);
+    assert.equal("errorMessage" in log, false);
+  }
   assert.deepEqual(
     logs.map((log) => [
       log.stage,
       log.outcome,
+      log.method,
+      log.routePath ?? null,
       log.status ?? null,
       log.policyName ?? null,
-      log.query ?? null,
-      JSON.stringify(log.params ?? {}),
-      JSON.stringify(log.headers ?? {}),
     ]),
     [
-      ["request_received", "received", null, null, "?key=abc&device=xyz", JSON.stringify({ key: "abc", device: "xyz" }), JSON.stringify({ "x-api-key": "[REDACTED]", "x-device-id": "device-123", "x-license-key": "[REDACTED]" })],
-      ["route_resolution", "matched", null, null, "?key=abc&device=xyz", JSON.stringify({ key: "abc", device: "xyz" }), JSON.stringify({ "x-api-key": "[REDACTED]", "x-device-id": "device-123", "x-license-key": "[REDACTED]" })],
-      ["request_policy", "short_circuit", 401, "stop", "?key=abc&device=xyz", JSON.stringify({ key: "abc", device: "xyz" }), JSON.stringify({ "x-api-key": "[REDACTED]", "x-device-id": "device-123", "x-license-key": "[REDACTED]" })],
-      ["analytics", "scheduled", 401, null, "?key=abc&device=xyz", JSON.stringify({ key: "abc", device: "xyz" }), JSON.stringify({ "x-api-key": "[REDACTED]", "x-device-id": "device-123", "x-license-key": "[REDACTED]" })],
-      ["response_finalization", "completed", 401, null, "?key=abc&device=xyz", JSON.stringify({ key: "abc", device: "xyz" }), JSON.stringify({ "x-api-key": "[REDACTED]", "x-device-id": "device-123", "x-license-key": "[REDACTED]" })],
+      ["request_received", "received", "GET", null, null, null],
+      ["route_resolution", "matched", "GET", "/api/test", null, null],
+      ["request_policy", "short_circuit", "GET", "/api/test", 401, "stop"],
+      ["analytics", "scheduled", "GET", "/api/test", 401, null],
+      ["response_finalization", "completed", "GET", "/api/test", 401, null],
     ],
   );
 });
@@ -344,7 +328,7 @@ test("executeGatewayRequest matches wildcard url routes as prefixes", async () =
       ["route_resolution", "matched", "/udemy/v2/api/", null],
       ["origin", "started", "/udemy/v2/api/", null],
       ["origin", "completed", "/udemy/v2/api/", 200],
-      ["response_finalization", "completed", null, 200],
+      ["response_finalization", "completed", "/udemy/v2/api/", 200],
     ],
   );
 });
@@ -449,7 +433,7 @@ test("executeGatewayRequest handles CORS preflight without hitting origin", asyn
       ["request_received", "received", null, null],
       ["route_resolution", "matched", "/udemy/v2/api/", null],
       ["response_policy", "applied", "/udemy/v2/api/", 204],
-      ["response_finalization", "completed", null, 204],
+      ["response_finalization", "completed", "/udemy/v2/api/", 204]
     ],
   );
 });
@@ -483,8 +467,8 @@ test("executeGatewayRequest finalizes route misses as 404 responses", async () =
           status: event.status,
         });
       },
-      logAnalytics: async (_request, finalResponse) => {
-        analytics.push(finalResponse.status);
+      logAnalytics: async (event) => {
+        analytics.push(event.status);
       },
     },
   );
@@ -506,7 +490,7 @@ test("executeGatewayRequest finalizes route misses as 404 responses", async () =
 
 test("executeGatewayRequest finalizes unexpected failures as 500 responses", async () => {
   const analytics: number[] = [];
-  const logs: Array<{ stage: string; outcome: string; status?: number; errorMessage?: string }> = [];
+  const logs: Array<{ stage: string; outcome: string; status?: number }> = [];
   const { ctx, flush } = createContext();
   const gateway = compileGateway(
     {
@@ -548,11 +532,10 @@ test("executeGatewayRequest finalizes unexpected failures as 500 responses", asy
           stage: event.stage,
           outcome: event.outcome,
           status: event.status,
-          errorMessage: event.errorMessage,
         });
       },
-      logAnalytics: async (_request, finalResponse) => {
-        analytics.push(finalResponse.status);
+      logAnalytics: async (event) => {
+        analytics.push(event.status);
       },
     },
   );
@@ -562,14 +545,14 @@ test("executeGatewayRequest finalizes unexpected failures as 500 responses", asy
   assert.equal(response.status, 500);
   assert.equal(analytics[0], 500);
   assert.deepEqual(
-    logs.map((log) => [log.stage, log.outcome, log.status ?? null, log.errorMessage ?? null]),
+    logs.map((log) => [log.stage, log.outcome, log.status ?? null]),
     [
-      ["request_received", "received", null, null],
-      ["route_resolution", "matched", null, null],
-      ["origin", "started", null, null],
-      ["execution", "failed", 500, "boom"],
-      ["analytics", "scheduled", 500, null],
-      ["response_finalization", "completed", 500, null],
+      ["request_received", "received", null],
+      ["route_resolution", "matched", null],
+      ["origin", "started", null],
+      ["execution", "failed", 500],
+      ["analytics", "scheduled", 500],
+      ["response_finalization", "completed", 500],
     ],
   );
 });

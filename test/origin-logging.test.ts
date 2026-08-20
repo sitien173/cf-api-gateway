@@ -3,14 +3,7 @@ import assert from "node:assert/strict";
 
 import { proxyAll, upstreamWithFallback, url } from "../src/origins/index.ts";
 
-type LoggedEvent = {
-  stage?: string;
-  outcome?: string;
-  status?: number;
-  targetUrl?: string;
-  errorMessage?: string;
-  headers?: Record<string, string>;
-};
+type LoggedEvent = Record<string, unknown>;
 
 const withCapturedConsole = async (
   run: (logs: { info: LoggedEvent[]; error: LoggedEvent[] }) => Promise<void>,
@@ -76,10 +69,10 @@ test("proxyAll logs primary failure and fallback completion with structured cont
           .filter((event) =>
             event.outcome === "primary_failed" || event.outcome === "fallback_completed",
           )
-          .map((event) => [event.stage, event.outcome, event.status, event.targetUrl]),
+          .map((event) => [event.stage, event.outcome, event.status, event.method, event.originType]),
         [
-          ["origin", "primary_failed", 503, `${primaryUrl}/orders?id=1`],
-          ["origin", "fallback_completed", 200, `${fallbackUrl}/orders?id=1`],
+          ["origin", "primary_failed", 503, "GET", "proxyAll"],
+          ["origin", "fallback_completed", 200, "GET", "proxyAll"],
         ],
       );
     });
@@ -128,10 +121,10 @@ test("upstreamWithFallback logs primary failure and fallback completion with str
           .filter((event) =>
             event.outcome === "primary_failed" || event.outcome === "fallback_completed",
           )
-          .map((event) => [event.stage, event.outcome, event.status, event.targetUrl]),
+          .map((event) => [event.stage, event.outcome, event.status, event.method, event.originType]),
         [
-          ["origin", "primary_failed", 503, `${primaryUrl}/orders?id=1`],
-          ["origin", "fallback_completed", 200, `${fallbackUrl}/orders?id=1`],
+          ["origin", "primary_failed", 503, "GET", "upstreamWithFallback"],
+          ["origin", "fallback_completed", 200, "GET", "upstreamWithFallback"],
         ],
       );
     });
@@ -161,19 +154,17 @@ test("url origin logs structured request failure details", async () => {
 
       assert.equal(response.status, 500);
       assert.deepEqual(
-        logs.error.map((event) => [event.stage, event.outcome, event.errorMessage, event.targetUrl, JSON.stringify(event.headers ?? {})]),
-        [[
-          "origin",
-          "request_failed",
-          "network down",
-          "https://origin.example.com/orders",
-          JSON.stringify({
-            authorization: "[REDACTED]",
-            "x-device-id": "device-456",
-            "x-license-key": "[REDACTED]",
-          }),
-        ]],
+        logs.error.map((event) => [event.stage, event.outcome, event.method, event.originType]),
+        [["origin", "request_failed", "GET", "url"]],
       );
+      for (const event of logs.error) {
+        assert.equal("path" in event, false);
+        assert.equal("query" in event, false);
+        assert.equal("params" in event, false);
+        assert.equal("headers" in event, false);
+        assert.equal("targetUrl" in event, false);
+        assert.equal("errorMessage" in event, false);
+      }
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -209,10 +200,10 @@ test("url origin preserves the incoming query string for fixed upstream paths", 
 
       assert.equal(response.status, 200);
       assert.deepEqual(
-        logs.info.map((event) => [event.stage, event.outcome, event.status, event.targetUrl]),
+        logs.info.map((event) => [event.stage, event.outcome, event.status, event.method, event.originType]),
         [
-          ["origin", "started", undefined, "https://origin.example.com/cookies?key=abc&device=xyz"],
-          ["origin", "completed", 200, "https://origin.example.com/cookies?key=abc&device=xyz"],
+          ["origin", "started", undefined, "GET", "url"],
+          ["origin", "completed", 200, "GET", "url"],
         ],
       );
     });

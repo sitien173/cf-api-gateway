@@ -1,6 +1,6 @@
 import { ErrorResponse } from "../helpers/response";
 import type { IRequest } from "../types";
-import { createLogContext, emitGatewayLog, toErrorMessage } from "./logging";
+import { createLogContext, emitGatewayLog } from "./logging";
 import type {
   CompiledGateway,
   CompiledRoute,
@@ -10,6 +10,7 @@ import type {
 } from "./types";
 
 const defaultNow = () => Date.now();
+const analyticsRouteMissLabel = "route_miss";
 
 const resolveRoute = (
   gateway: CompiledGateway,
@@ -81,6 +82,7 @@ const finalizeResponse = (
   ctx: GatewayExecutionContext,
   dependencies: ExecutionDependencies,
   latencyStart: number,
+  route?: CompiledRoute,
 ): Response => {
   const latency = (dependencies.now ?? defaultNow)() - latencyStart;
 
@@ -89,18 +91,28 @@ const finalizeResponse = (
       level: "info",
       stage: "analytics",
       outcome: "scheduled",
-      ...createLogContext(request),
+      ...createLogContext(request, route),
       status: response.status,
       latencyMs: latency,
     });
-    ctx.waitUntil(dependencies.logAnalytics(request, response, env, latency));
+    ctx.waitUntil(
+      dependencies.logAnalytics(
+        {
+          routePath: route?.path ?? analyticsRouteMissLabel,
+          method: request.method,
+          status: response.status,
+          latencyMs: latency,
+        },
+        env,
+      ),
+    );
   }
 
   emitGatewayLog(dependencies.logEvent, {
     level: "info",
     stage: "response_finalization",
     outcome: "completed",
-    ...createLogContext(request),
+    ...createLogContext(request, route),
     status: response.status,
     latencyMs: latency,
   });
@@ -116,6 +128,7 @@ export const executeGatewayRequest = async (
   dependencies: ExecutionDependencies = {},
 ): Promise<Response> => {
   const latencyStart = (dependencies.now ?? defaultNow)();
+  let route: CompiledRoute | undefined;
 
   try {
     emitGatewayLog(dependencies.logEvent, {
@@ -125,7 +138,7 @@ export const executeGatewayRequest = async (
       ...createLogContext(originalRequest),
     });
 
-    const route =
+    route =
       resolvePreflightRoute(gateway, originalRequest) ??
       resolveRoute(gateway, originalRequest);
 
@@ -145,6 +158,7 @@ export const executeGatewayRequest = async (
         ctx,
         dependencies,
         latencyStart,
+        route,
       );
     }
 
@@ -170,6 +184,7 @@ export const executeGatewayRequest = async (
         ctx,
         dependencies,
         latencyStart,
+        route,
       );
     }
 
@@ -195,6 +210,7 @@ export const executeGatewayRequest = async (
           ctx,
           dependencies,
           latencyStart,
+          route,
         );
       }
 
@@ -242,15 +258,15 @@ export const executeGatewayRequest = async (
       ctx,
       dependencies,
       latencyStart,
+      route,
     );
-  } catch (error) {
+  } catch {
     emitGatewayLog(dependencies.logEvent, {
       level: "error",
       stage: "execution",
       outcome: "failed",
-      ...createLogContext(originalRequest),
+      ...createLogContext(originalRequest, route),
       status: 500,
-      errorMessage: toErrorMessage(error),
     });
 
     return finalizeResponse(
@@ -260,6 +276,7 @@ export const executeGatewayRequest = async (
       ctx,
       dependencies,
       latencyStart,
+      route,
     );
   }
 };
