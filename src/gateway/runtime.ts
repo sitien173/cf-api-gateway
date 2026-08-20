@@ -190,7 +190,7 @@ export const executeGatewayRequest = async (
     let modifiedRequest: IRequest = originalRequest;
 
     for (const policy of route.requestPolicies) {
-      const result = await policy.handler(modifiedRequest, policy.options);
+      const result = await policy.handler(modifiedRequest, policy.options, env);
 
       if (result instanceof Response) {
         emitGatewayLog(dependencies.logEvent, {

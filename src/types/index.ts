@@ -1,5 +1,5 @@
 export declare interface IRequest extends Request {
-  user?: any;
+  user?: string;
 }
 
 export declare interface IRequestInit extends RequestInit {
@@ -7,9 +7,19 @@ export declare interface IRequestInit extends RequestInit {
   headers: Headers;
 }
 
+export interface Auth0Bindings {
+  AUTH0_ISSUER?: string;
+  AUTH0_AUDIENCE?: string;
+}
+
+export type RequestPolicyEnv = Auth0Bindings & {
+  [key: string]: any;
+};
+
 export type TRequestPolicyHandler = (
   request: IRequest,
-  options: any
+  options: any,
+  env: RequestPolicyEnv,
 ) => Promise<IRequest | Response>;
 
 export type TResponsePolicyHandler = (

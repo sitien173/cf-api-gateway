@@ -5,6 +5,8 @@ import type {
 } from "../types";
 
 export type GatewayEnv = {
+  AUTH0_ISSUER?: string;
+  AUTH0_AUDIENCE?: string;
   GATEWAY_NAME?: string;
   ANALYTICS_ENABLED?: string;
   API_ANALYTICS?: AnalyticsEngineDataset;

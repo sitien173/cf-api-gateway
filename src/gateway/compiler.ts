@@ -10,6 +10,7 @@ import type {
 } from "./types";
 
 const hasWildcardSuffix = (path: string): boolean => path.endsWith("/*");
+const publicMethods = new Set(["GET", "HEAD", "OPTIONS"]);
 
 const resolveMatchMode = (originType: string, path: string): RouteMatchMode =>
   originType === "proxyAll" || hasWildcardSuffix(path) ? "prefix" : "exact";
@@ -72,6 +73,20 @@ export const compileGateway = (
 
     const matchMode = resolveMatchMode(route.origin.type, route.path);
 
+    const requestPolicies = resolvePolicies<CompiledRequestPolicy>(
+      route.policies.request,
+      policyDefinitions,
+      handlers.requestPolicies,
+    );
+    const requiresAuth = !publicMethods.has(route.method.toUpperCase());
+    const hasAuth0Policy = route.policies.request.some(
+      (name) => policyDefinitions.get(name)?.type === "auth0jwt",
+    );
+
+    if (requiresAuth && !hasAuth0Policy) {
+      throw new Error(`Route ${route.method} ${route.path} must use an auth0jwt policy`);
+    }
+
     return {
       path: normalizeRoutePath(route.path, matchMode),
       method: route.method,
@@ -81,11 +96,7 @@ export const compileGateway = (
         handler: originHandler,
         options: route.origin.options,
       },
-      requestPolicies: resolvePolicies<CompiledRequestPolicy>(
-        route.policies.request,
-        policyDefinitions,
-        handlers.requestPolicies,
-      ),
+      requestPolicies,
       responsePolicies: resolvePolicies<CompiledResponsePolicy>(
         route.policies.response,
         policyDefinitions,

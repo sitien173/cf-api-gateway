@@ -387,16 +387,26 @@ Add rate limiting policy:
 
 ### Authentication Policies
 
+Mutation routes must use the `auth0jwt` policy type. Auth0 values are read only
+from Worker secrets, not route configuration:
+
 ```json
 {
-  "name": "jwt-auth",
+  "name": "require-auth0",
   "type": "auth0jwt",
-  "options": {
-    "issuer": "https://your-domain.auth0.com/",
-    "audience": "https://your-api"
-  }
+  "options": {}
 }
 ```
+
+Configure the deployment secrets without committing their values:
+
+```bash
+npx wrangler secret put AUTH0_ISSUER
+npx wrangler secret put AUTH0_AUDIENCE
+```
+
+`GET`, `HEAD`, and `OPTIONS` remain public. `POST`, `PUT`, `PATCH`, and `DELETE`
+routes require a valid Auth0 bearer token.
 
 ---
 

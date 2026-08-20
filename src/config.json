@@ -69,7 +69,9 @@
         }
       },
       "policies": {
-        "request": [],
+        "request": [
+          "require-auth0"
+        ],
         "response": [
           "udemy-cors",
           "hcmc-cors"
@@ -88,7 +90,9 @@
         }
       },
       "policies": {
-        "request": [],
+        "request": [
+          "require-auth0"
+        ],
         "response": [
           "udemy-cors",
           "hcmc-cors"
@@ -107,7 +111,9 @@
         }
       },
       "policies": {
-        "request": [],
+        "request": [
+          "require-auth0"
+        ],
         "response": [
           "udemy-cors",
           "hcmc-cors"
@@ -183,7 +189,9 @@
         }
       },
       "policies": {
-        "request": [],
+        "request": [
+          "require-auth0"
+        ],
         "response": [
           "udemy-cors",
           "hcmc-cors"
@@ -202,7 +210,9 @@
         }
       },
       "policies": {
-        "request": [],
+        "request": [
+          "require-auth0"
+        ],
         "response": [
           "udemy-cors",
           "hcmc-cors"
@@ -221,7 +231,9 @@
         }
       },
       "policies": {
-        "request": [],
+        "request": [
+          "require-auth0"
+        ],
         "response": [
           "udemy-cors",
           "hcmc-cors"
@@ -256,7 +268,9 @@
         }
       },
       "policies": {
-        "request": [],
+        "request": [
+          "require-auth0"
+        ],
         "response": [
           "config-vault-cors"
         ]
@@ -273,7 +287,9 @@
         }
       },
       "policies": {
-        "request": [],
+        "request": [
+          "require-auth0"
+        ],
         "response": [
           "config-vault-cors"
         ]
@@ -290,7 +306,9 @@
         }
       },
       "policies": {
-        "request": [],
+        "request": [
+          "require-auth0"
+        ],
         "response": [
           "config-vault-cors"
         ]
@@ -357,6 +375,11 @@
         ],
         "allowCredentials": false
       }
+    },
+    {
+      "name": "require-auth0",
+      "type": "auth0jwt",
+      "options": {}
     }
   ]
 }
