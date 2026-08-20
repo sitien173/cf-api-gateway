@@ -17,6 +17,8 @@ Make failover shared and safe for mutation requests.
 
 `proxyAll` and `upstreamWithFallback` duplicate unsafe retry logic that reuses mutation request bodies. An unhealthy primary must select the fallback directly once. A primary transport failure or 5xx may retry only GET or HEAD once. A mutation transport failure returns 503, and a primary mutation response retains its original status. Both public handlers must preserve their signatures and wrapper-specific path behavior.
 
+Put only shared health checking, request construction, retry selection, response wrapping, and 503 handling in `failover.ts`. Keep each wrapper's path construction, redirect rewrite callback, defaults, and cache separate. Set `redirect: "manual"` for every upstream request. Clear health-check timers in `finally`. Cancel an abandoned primary GET or HEAD 5xx response before its single fallback attempt. Do not treat response-rewrite errors as transport failures.
+
 ## Files
 
 - `src/origins/failover.ts`
