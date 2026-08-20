@@ -1,313 +1,170 @@
-import { ErrorResponse } from "../helpers/response";
 import { createOriginLogContext, emitGatewayLog } from "../gateway/logging";
+import { checkUpstreamHealth, executeFailover } from "./failover";
 import { IRequest, TOriginHandler } from "../types";
 
 type HealthCheckResult = {
-    healthy: boolean;
-    timestamp: number;
+  healthy: boolean;
+  timestamp: number;
 };
 
 type UpstreamWithFallbackOptions = {
-    primaryUrl: string;
-    fallbackUrl: string;
-    healthCheckPath?: string;
-    healthCheckTimeout?: number;
-    healthCheckCacheTtl?: number;
+  primaryUrl: string;
+  fallbackUrl: string;
+  healthCheckPath?: string;
+  healthCheckTimeout?: number;
+  healthCheckCacheTtl?: number;
 };
 
-// In-memory cache for health status
 const healthCache = new Map<string, HealthCheckResult>();
 
-/**
- * Rewrites the Location header to point back to the gateway
- */
 function rewriteLocation(
-    location: string | null,
-    gatewayUrl: URL,
-    primaryUrl: string,
-    fallbackUrl: string
+  location: string | null,
+  gatewayUrl: URL,
+  primaryUrl: string,
+  fallbackUrl: string,
 ): string | null {
-    if (!location) return null;
+  if (!location) return null;
 
+  try {
+    const primary = new URL(primaryUrl);
+    const fallback = new URL(fallbackUrl);
+
+    let locUrl: URL;
     try {
-        const primary = new URL(primaryUrl);
-        const fallback = new URL(fallbackUrl);
-
-        // Try parsing the location as a full URL
-        let locUrl: URL;
-        try {
-            locUrl = new URL(location);
-        } catch {
-            // Relative URLs are fine as they resolve correctly to the gateway origin
-            return location;
-        }
-
-        // Check if location points to one of our upstreams
-        const isPrimary = (locUrl.hostname === primary.hostname);
-        const isFallback = (locUrl.hostname === fallback.hostname);
-
-        if (isPrimary || isFallback) {
-            // Reconstruct the URL using the gateway's origin
-            // For upstreamWithFallback, we don't have a stripPrefix option in its type yet,
-            // but we can assume it's root or handled by the caller.
-            const newPath = locUrl.pathname + locUrl.search + locUrl.hash;
-            return `${gatewayUrl.origin}${newPath}`;
-        }
-
-        return location;
-    } catch (e) {
-        emitGatewayLog(undefined, {
-            level: "error",
-            stage: "origin_rewrite",
-            outcome: "failed",
-            ...createOriginLogContext(new Request(gatewayUrl.toString()), "upstreamWithFallback"),
-        });
-        return location;
-    }
-}
-
-/**
- * Check if an upstream is healthy
- */
-async function checkUpstreamHealth(
-    baseUrl: string,
-    healthPath: string = "/api/health",
-    timeout: number = 5000
-): Promise<boolean> {
-    try {
-        const healthUrl = `${baseUrl.replace(/\/$/, '')}${healthPath}`;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeout);
-
-        const response = await fetch(healthUrl, {
-            method: 'GET',
-            signal: controller.signal,
-        });
-
-        clearTimeout(timeoutId);
-        return response.ok;
-    } catch (error) {
-        emitGatewayLog(undefined, {
-            level: "error",
-            stage: "origin_health",
-            outcome: "check_failed",
-            ...createOriginLogContext(new Request(`https://health-check.local${healthPath}`), "upstreamWithFallback"),
-        });
-        return false;
-    }
-}
-
-/**
- * Get cached health status or perform health check
- */
-async function getHealthStatus(
-    url: string,
-    healthPath: string,
-    timeout: number,
-    cacheTtl: number
-): Promise<boolean> {
-    const now = Date.now();
-    const cached = healthCache.get(url);
-
-    // Return cached result if available and not expired
-    if (cached && (now - cached.timestamp) < cacheTtl) {
-        return cached.healthy;
+      locUrl = new URL(location);
+    } catch {
+      return location;
     }
 
-    // Perform health check
-    const healthy = await checkUpstreamHealth(url, healthPath, timeout);
+    const isPrimary = locUrl.hostname === primary.hostname;
+    const isFallback = locUrl.hostname === fallback.hostname;
 
-    // Cache the result
-    healthCache.set(url, {
-        healthy,
-        timestamp: now,
+    if (isPrimary || isFallback) {
+      const newPath = locUrl.pathname + locUrl.search + locUrl.hash;
+      return `${gatewayUrl.origin}${newPath}`;
+    }
+
+    return location;
+  } catch {
+    emitGatewayLog(undefined, {
+      level: "error",
+      stage: "origin_rewrite",
+      outcome: "failed",
+      ...createOriginLogContext(new Request(gatewayUrl.toString()), "upstreamWithFallback"),
     });
-
-    return healthy;
+    return location;
+  }
 }
 
-/**
- * Upstream origin handler with automatic failover
- * 
- * Routes requests to primary upstream with automatic failover to fallback
- * if primary is unhealthy or fails to respond.
- */
+const getHealthStatus = async (
+  url: string,
+  healthPath: string,
+  timeout: number,
+  cacheTtl: number,
+): Promise<boolean> => {
+  const now = Date.now();
+  const cached = healthCache.get(url);
+
+  if (cached && now - cached.timestamp < cacheTtl) {
+    return cached.healthy;
+  }
+
+  const healthy = await checkUpstreamHealth(url, healthPath, timeout);
+  healthCache.set(url, { healthy, timestamp: now });
+  return healthy;
+};
+
 export const upstreamWithFallback: TOriginHandler = async (
-    request: IRequest,
-    options: UpstreamWithFallbackOptions
+  request: IRequest,
+  options: UpstreamWithFallbackOptions,
 ) => {
-    const {
-        primaryUrl,
-        fallbackUrl,
-        healthCheckPath = '/api/health',
-        healthCheckTimeout = 5000,
-        healthCheckCacheTtl = 60000, // 60 seconds
-    } = options;
+  const {
+    primaryUrl,
+    fallbackUrl,
+    healthCheckPath = "/api/health",
+    healthCheckTimeout = 5000,
+    healthCheckCacheTtl = 60000,
+  } = options;
 
-    // Parse the request URL to get path and query
-    const url = new URL(request.url);
-    const pathAndQuery = url.pathname + url.search;
+  const url = new URL(request.url);
+  const pathAndQuery = url.pathname + url.search;
+  const primaryHealthy = await getHealthStatus(
+    primaryUrl,
+    healthCheckPath,
+    healthCheckTimeout,
+    healthCheckCacheTtl,
+  );
 
-    // Check primary upstream health
-    const isPrimaryHealthy = await getHealthStatus(
-        primaryUrl,
-        healthCheckPath,
-        healthCheckTimeout,
-        healthCheckCacheTtl
-    );
+  emitGatewayLog(undefined, {
+    level: "info",
+    stage: "origin",
+    outcome: primaryHealthy ? "routed_primary" : "routed_fallback",
+    ...createOriginLogContext(request, "upstreamWithFallback"),
+  });
 
-    let targetUrl: string;
-    let isUsingFallback = false;
-
-    if (isPrimaryHealthy) {
-        targetUrl = `${primaryUrl.replace(/\/$/, '')}${pathAndQuery}`;
-        emitGatewayLog(undefined, {
-            level: "info",
-            stage: "origin",
-            outcome: "routed_primary",
-            ...createOriginLogContext(request, "upstreamWithFallback"),
-        });
-    } else {
-        targetUrl = `${fallbackUrl.replace(/\/$/, '')}${pathAndQuery}`;
-        isUsingFallback = true;
-        emitGatewayLog(undefined, {
-            level: "info",
-            stage: "origin",
-            outcome: "routed_fallback",
-            ...createOriginLogContext(request, "upstreamWithFallback"),
-        });
+  const primaryTargetUrl = `${primaryUrl.replace(/\/$/, "")}${pathAndQuery}`;
+  const fallbackTargetUrl = `${fallbackUrl.replace(/\/$/, "")}${pathAndQuery}`;
+  const wrapResponse = (response: Response): Response => {
+    const responseHeaders = new Headers(response.headers);
+    const location = responseHeaders.get("Location");
+    if (location) {
+      const newLocation = rewriteLocation(location, url, primaryUrl, fallbackUrl);
+      if (newLocation) responseHeaders.set("Location", newLocation);
     }
 
-    // Read the body once if it exists (to avoid ReadableStream locked errors)
-    let bodyBuffer: ArrayBuffer | undefined = undefined;
-    if (request.method !== 'GET' && request.method !== 'HEAD' && request.body) {
-        bodyBuffer = await request.arrayBuffer();
-    }
-
-    // Create the upstream request
-    const headers = new Headers(request.headers);
-    headers.delete('host');
-
-    const upstreamRequest = new Request(targetUrl, {
-        method: request.method,
-        headers: headers,
-        body: bodyBuffer,
+    return new Response(response.body, {
+      status: response.status,
+      headers: responseHeaders,
     });
+  };
 
-    try {
-        const upstreamResponse = await fetch(upstreamRequest, {
-            redirect: 'manual'
-        });
-
-        // If primary failed and we haven't tried fallback yet, try fallback
-        // We only fallback on server errors (5xx) or if the primary is down.
-        if (upstreamResponse.status >= 500 && !isUsingFallback) {
-            const fallbackTargetUrl = `${fallbackUrl.replace(/\/$/, '')}${pathAndQuery}`;
-            emitGatewayLog(undefined, {
-                level: "info",
-                stage: "origin",
-                outcome: "primary_failed",
-                ...createOriginLogContext(request, "upstreamWithFallback"),
-                status: upstreamResponse.status,
-            });
-            emitGatewayLog(undefined, {
-                level: "info",
-                stage: "origin",
-                outcome: "fallback_started",
-                ...createOriginLogContext(request, "upstreamWithFallback"),
-            });
-            const fallbackHeaders = new Headers(request.headers);
-            fallbackHeaders.delete('host');
-
-            const fallbackRequest = new Request(fallbackTargetUrl, {
-                method: request.method,
-                headers: fallbackHeaders,
-                body: bodyBuffer,
-                redirect: 'manual'
-            });
-
-            const fallbackResponse = await fetch(fallbackRequest);
-
-            // Rewrite Location header for fallback response
-            const responseHeaders = new Headers(fallbackResponse.headers);
-            const location = responseHeaders.get('Location');
-            if (location) {
-                const newLocation = rewriteLocation(location, url, primaryUrl, fallbackUrl);
-                if (newLocation) responseHeaders.set('Location', newLocation);
-            }
-
-            emitGatewayLog(undefined, {
-                level: "info",
-                stage: "origin",
-                outcome: "fallback_completed",
-                ...createOriginLogContext(request, "upstreamWithFallback"),
-                status: fallbackResponse.status,
-            });
-
-            return new Response(fallbackResponse.body, {
-                status: fallbackResponse.status,
-                headers: responseHeaders
-            });
-        }
-
-        // Rewrite Location header for primary response
-        const responseHeaders = new Headers(upstreamResponse.headers);
-        const location = responseHeaders.get('Location');
-        if (location) {
-            const newLocation = rewriteLocation(location, url, primaryUrl, fallbackUrl);
-            if (newLocation) responseHeaders.set('Location', newLocation);
-        }
-
-        return new Response(upstreamResponse.body, {
-            status: upstreamResponse.status,
-            headers: responseHeaders
-        });
-    } catch (error) {
-        emitGatewayLog(undefined, {
-            level: "error",
-            stage: "origin",
-            outcome: "request_failed",
-            ...createOriginLogContext(request, "upstreamWithFallback"),
-        });
-
-        // If we were trying primary and it failed, try fallback
-        if (!isUsingFallback) {
-            try {
-                const fallbackTargetUrl = `${fallbackUrl.replace(/\/$/, '')}${pathAndQuery}`;
-                emitGatewayLog(undefined, {
-                    level: "info",
-                    stage: "origin",
-                    outcome: "fallback_started",
-                    ...createOriginLogContext(request, "upstreamWithFallback"),
-                });
-                const fallbackHeaders = new Headers(request.headers);
-                fallbackHeaders.delete('host');
-
-                const fallbackRequest = new Request(fallbackTargetUrl, {
-                    method: request.method,
-                    headers: fallbackHeaders,
-                    body: bodyBuffer,
-                });
-
-                const fallbackResponse = await fetch(fallbackRequest);
-                emitGatewayLog(undefined, {
-                    level: "info",
-                    stage: "origin",
-                    outcome: "fallback_completed",
-                    ...createOriginLogContext(request, "upstreamWithFallback"),
-                    status: fallbackResponse.status,
-                });
-                return new Response(fallbackResponse.body, fallbackResponse);
-            } catch (fallbackError) {
-                emitGatewayLog(undefined, {
-                    level: "error",
-                    stage: "origin",
-                    outcome: "fallback_failed",
-                    ...createOriginLogContext(request, "upstreamWithFallback"),
-                });
-            }
-        }
-
-        return new ErrorResponse("All upstreams failed", 503);
-    }
+  return executeFailover({
+    request,
+    primaryUrl: primaryTargetUrl,
+    fallbackUrl: fallbackTargetUrl,
+    primaryHealthy,
+    wrapResponse,
+    onPrimaryFailure: (status) => {
+      emitGatewayLog(undefined, {
+        level: "info",
+        stage: "origin",
+        outcome: "primary_failed",
+        ...createOriginLogContext(request, "upstreamWithFallback"),
+        status,
+      });
+    },
+    onFallbackStarted: () => {
+      emitGatewayLog(undefined, {
+        level: "info",
+        stage: "origin",
+        outcome: "fallback_started",
+        ...createOriginLogContext(request, "upstreamWithFallback"),
+      });
+    },
+    onFallbackCompleted: (status) => {
+      emitGatewayLog(undefined, {
+        level: "info",
+        stage: "origin",
+        outcome: "fallback_completed",
+        ...createOriginLogContext(request, "upstreamWithFallback"),
+        status,
+      });
+    },
+    onRequestFailed: () => {
+      emitGatewayLog(undefined, {
+        level: "error",
+        stage: "origin",
+        outcome: "request_failed",
+        ...createOriginLogContext(request, "upstreamWithFallback"),
+      });
+    },
+    onFallbackFailed: () => {
+      emitGatewayLog(undefined, {
+        level: "error",
+        stage: "origin",
+        outcome: "fallback_failed",
+        ...createOriginLogContext(request, "upstreamWithFallback"),
+      });
+    },
+  });
 };

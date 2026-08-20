@@ -10,12 +10,33 @@
 - Review Profile: review
 - Implementation Job: pending
 - Review Job: pending
-- Started: pending
-- Finished: pending
+- Started: 2026-08-20T15:00:00+07:00
+- Finished: 2026-08-20T15:14:23+07:00
 
 ## Implementation Response
 
-<!-- Worker appends the full `# EXTERNAL RESPONSE` block here. -->
+# EXTERNAL RESPONSE
+## META
+- Phase 3 / Started 2026-08-20T15:00:00+07:00 / Finished 2026-08-20T15:14:23+07:00 / Plan dir docs/plans/apply-code-review-findings/phase-03
+## SUMMARY
+Consolidated both failover handlers onto a shared executor that prevents mutation replays, limits retries to GET and HEAD, cleans timers, and preserves manual redirect and rewrite behavior.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| added | src/origins/failover.ts | Added shared health, request, retry, response, and 503 failover logic. |
+| modified | src/origins/proxyAll.ts | Delegated failover while preserving strip-prefix paths, cache, defaults, and rewrites. |
+| modified | src/origins/upstreamWithFallback.ts | Delegated failover while preserving wrapper paths, cache, defaults, and rewrites. |
+| added | test/origin-failover.test.ts | Added mutation, retry-method, timer, redirect, unhealthy-primary, and rewrite isolation regressions. |
+| modified | docs/plans/apply-code-review-findings/phase-03/notes.md | Recorded task decisions and evidence. |
+| modified | docs/plans/apply-code-review-findings/phase-03/journal.md | Recorded implementation response. |
+## NOTES
+- phase-03/notes.md  (## Task 1, ## Task 2, ## Task 3, ## Task 4)
+## SPEC COMPLIANCE
+- Meets Spec? YES — all requested failover behavior and verification checks pass.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
 
 ## Quality Review
 
