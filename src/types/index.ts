@@ -3,7 +3,7 @@ export declare interface IRequest extends Request {
 }
 
 export declare interface IRequestInit extends RequestInit {
-  user?: any;
+  user?: string;
   headers: Headers;
 }
 

@@ -234,7 +234,7 @@ curl http://localhost:8787/udemy/api/health
 curl https://api-gateway.YOUR-SUBDOMAIN.workers.dev/udemy/api/health
 
 # With authentication
-curl -H "X-License-Key: YOUR_KEY" \
+curl -H "Authorization: Bearer YOUR_TOKEN" \
   https://api-gateway.YOUR-SUBDOMAIN.workers.dev/udemy/api/folders
 ```
 
@@ -270,7 +270,7 @@ Enable Analytics Engine to track requests, latency, and errors:
 
 ```toml
 analytics_engine_datasets = [
-  { binding = "ANALYTICS" }
+  { binding = "API_ANALYTICS" }
 ]
 
 [vars]
@@ -444,7 +444,7 @@ routes require a valid Auth0 bearer token.
 ### Health
 - `GET /api/health` - Health check
 
-### API (with `X-License-Key`)
+### API (with Auth0 bearer token)
 - `GET /api/sync` - Sync all data
 - `POST /api/init` - Initialize default folders
 - `GET /api/folders` - Get folders
