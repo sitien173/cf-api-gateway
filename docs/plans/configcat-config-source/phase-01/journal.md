@@ -18,11 +18,30 @@ sections.
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-08-24
-- Finished: pending
+- Finished: 2026-08-24T10:55:41+07:00
 
 ## Implementation Response
 
-<!-- Worker appends the full `# EXTERNAL RESPONSE` block here. -->
+# EXTERNAL RESPONSE
+## META
+- Phase 1 / Started 2026-08-24 / Finished 2026-08-24T10:55:41+07:00 / Plan dir docs/plans/configcat-config-source
+## SUMMARY
+Added shape-only JSON Schema validation for gateway routing documents, with typed results and required fixture coverage.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Created | src/config/schema.ts | Added the gateway routing schema and `validateGatewayConfig`. |
+| Created | test/config-schema.test.ts | Added valid and malformed document validation tests. |
+| Updated | docs/plans/configcat-config-source/phase-01/notes.md | Recorded task decisions and RED-to-GREEN evidence. |
+| Updated | docs/plans/configcat-config-source/phase-01/journal.md | Recorded the implementation response and completion metadata. |
+## NOTES
+- phase-01/notes.md (## Task 1, ## Task 2, ## Task 3)
+## SPEC COMPLIANCE
+- Meets Spec? YES — Shape-only validation is implemented without origin, policy, or method enums; required checks pass.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
 
 ## Quality Review
 
