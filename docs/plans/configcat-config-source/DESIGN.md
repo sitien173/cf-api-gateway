@@ -62,13 +62,10 @@ sequenceDiagram
         W->>W: validate and compileGateway
         W->>KV: write lkg on success
     else cold isolate, nothing compiled
-        W->>KV: read SDK cache
-        KV-->>W: config or empty
-        opt empty or invalid
-            W->>KV: read lkg
-        end
-        opt still nothing
-            W->>CC: inline forceRefreshAsync
+        loop candidate ladder until one compiles
+            W->>KV: read SDK cache, then lkg
+            W->>CC: bounded inline forceRefreshAsync
+            W->>W: parse, validate, compileGateway
         end
         W-->>R: serve or 503
     end
@@ -83,36 +80,86 @@ Isolate-level state:
 - `client`, the ConfigCat client, created on first request
 - `compiled`, the last good `CompiledGateway`
 - `lastRaw`, the raw JSON string that produced `compiled`
-- `lastRefreshMs`, timestamp of the last refresh trigger
+- `nextRefreshMs`, earliest time the next refresh may start
+- `refreshInFlight`, the pending refresh promise or undefined
+- `generation`, a counter incremented per refresh start
 
 The client cannot be created at module scope, because the KV binding arrives on
 `env`. `getClient` is keyed per SDK key, so calling it per request is safe.
 
 ### Request path
 
-1. If `compiled` exists and `Date.now() - lastRefreshMs < 60000`, return it.
-   No await, no KV read, no fetch.
-2. Otherwise set `lastRefreshMs` first, then schedule a background refresh
-   through `ctx.waitUntil`. Setting the timestamp before the call prevents
-   concurrent requests in one isolate from stacking refreshes.
-3. A cold isolate with no `compiled` resolves inline instead, per the cold
-   start sequence below.
+1. If `compiled` exists and `Date.now() < nextRefreshMs`, return it. No await,
+   no KV read, no fetch.
+2. Otherwise, if `refreshInFlight` is set, return `compiled` without scheduling
+   anything. Otherwise start a refresh, store its promise in `refreshInFlight`,
+   and hand it to `ctx.waitUntil`.
+3. A cold isolate with no `compiled` resolves inline instead, per the candidate
+   ladder below.
+
+`nextRefreshMs` is set when a refresh settles, not when it starts:
+
+- On success, `Date.now() + 60000 + jitter`, where jitter is a random 0 to
+  15000 milliseconds. The jitter spreads refreshes so that many isolates do not
+  hit the ConfigCat CDN in the same instant.
+- On failure, `Date.now() + 5000`, so a transient error does not suppress
+  retries for a full minute.
+
+Guarding with `refreshInFlight` rather than a pre-set timestamp is what
+prevents concurrent requests in one isolate from stacking refreshes. A
+pre-set timestamp does not track work that is still running.
+
+Effective propagation is therefore up to about 75 seconds rather than exactly
+60. That is within the stated target.
 
 ### Background refresh
 
-`forceRefreshAsync`, then `getValueAsync`, then validate, then
-`compileGateway`, then swap `compiled` and `lastRaw`, then write `lkg`.
+`forceRefreshAsync` under a deadline, then `getValueAsync`, then parse,
+validate, and `compileGateway`. On success, swap `compiled` and `lastRaw`, then
+write `lkg`.
 
-Any throw leaves `compiled` untouched and logs an error.
+The refresh captures `generation` at entry and discards its result if
+`generation` has advanced by the time it completes. Without this, a slow
+refresh can overwrite the result of a newer one that already finished.
 
-### Cold start resolution
+Any throw leaves `compiled` untouched, logs an error, and applies the short
+failure backoff.
 
-1. `raw = await client.getValueAsync(FLAG_KEY, SENTINEL)`.
-2. If `raw` is the sentinel, read `lkg:gateway_config` from KV.
-3. If still empty, attempt one inline `forceRefreshAsync` and retry step 1.
-4. If still empty, return undefined. The caller responds 503.
-5. Validate, compile, assign `compiled` and `lastRaw`, write `lkg` under
-   `ctx.waitUntil`.
+`ctx.waitUntil` extends the isolate's lifetime past the response but does not
+guarantee completion. A refresh cut short by eviction or the platform deadline
+simply leaves `compiled` in place and the backoff unset, so the next request
+retries. No state is corrupted by a truncated refresh.
+
+### Cold start candidate ladder
+
+Candidates are tried in order. Each is fully processed, meaning parsed,
+schema-validated, and passed through `compileGateway`, before it is accepted.
+A candidate that fails any step is discarded and the ladder continues.
+
+1. `await client.getValueAsync(FLAG_KEY, SENTINEL)`, skipped if it returns the
+   sentinel.
+2. `lkg:<gatewayName>:gateway_config` from KV.
+3. One bounded inline `forceRefreshAsync`, then `getValueAsync` again.
+4. Deploy 1 only: the bundled `src/config.json`, passed as an explicit final
+   candidate. Removed in deploy 2.
+
+If every candidate fails, return undefined and the caller responds 503.
+
+Processing each candidate completely before accepting it is what makes the
+malformed-config row of the failure matrix true. Selecting a candidate first
+and validating afterward, as an earlier draft of this design did, lets a
+malformed non-sentinel value from ConfigCat shadow a perfectly good `lkg` and
+produce a 503.
+
+The bundled document is an explicit final candidate rather than the
+`getValueAsync` default. Using it as the default makes a cache miss
+indistinguishable from a real ConfigCat value, which would mask both the `lkg`
+and refresh candidates and make deploy 1 unable to demonstrate that config
+actually came from ConfigCat.
+
+Step 3 is worth its latency only because it is the last chance to avoid a 503.
+It is bounded by an SDK request timeout and is never used merely to improve
+freshness on an isolate that already has a usable candidate.
 
 ### Why ManualPoll
 
@@ -145,12 +192,38 @@ Both are added to the `Env` interface at `src/index.ts:9`.
 
 ### KV keys
 
-One namespace, two prefixes:
+One namespace, two prefixes, both scoped by gateway:
 
-- `cc:<sdkCacheKey>` for the SDK's own cache, via a custom `IConfigCatCache`.
-  The SDK supplies the key string to `get` and `set`. Reads pass
-  `cacheTtl: 60` so repeat reads in a colo hit Cloudflare's edge cache.
-- `lkg:gateway_config` for the validated last-known-good document.
+- `cc:<gatewayName>:<sdkCacheKey>` for the SDK's own cache, via a custom
+  `IConfigCatCache`. The SDK supplies the trailing key string to `get` and
+  `set`. Reads pass `cacheTtl: 60` so repeat reads in a colo hit Cloudflare's
+  edge cache.
+- `lkg:<gatewayName>:gateway_config` for the validated last-known-good
+  document.
+
+`gatewayName` is the existing `GATEWAY_NAME` var, already present in
+`wrangler.toml:18`. Scoping is required, not cosmetic: `wrangler.toml:3`
+records that this worker is templated per gateway, so an unscoped key in a
+shared KV namespace could serve one gateway another gateway's routes.
+Resolution fails closed if `GATEWAY_NAME` is unset.
+
+### Last-known-good write rule
+
+`lkg` is written only when all of the following hold:
+
+- The document came from a fresh CDN refresh, not from a value read out of the
+  KV SDK cache or from the bundled fallback.
+- Schema validation and `compileGateway` both succeeded.
+- The ConfigCat config timestamp on the new document is newer than the
+  timestamp stored alongside the existing `lkg` value.
+
+The stored value is an envelope carrying the raw document and that timestamp.
+
+Provenance qualification is what prevents last-known-good regression. Without
+it, a delayed isolate that read an older config from the SDK's KV cache can
+overwrite a newer `lkg`, and that rollback then persists into every future cold
+start. It also means cold isolates never write `lkg` at all, which removes the
+write-amplification concern that an earlier draft of this design accepted.
 
 ### Validation split
 
@@ -177,18 +250,35 @@ Enums for origin types, policy types, and methods are deliberately excluded
 from the schema. `compileGateway` already rejects unknown values, and
 duplicating those lists creates drift as soon as an origin is added.
 
+## Observability
+
+Every successful resolution logs the adopted candidate and a short hash of the
+document, through the existing `emitGatewayLog` path in
+`src/gateway/logging.ts`. Candidate values are `configcat`, `lkg`,
+`inline-refresh`, and `bundled`.
+
+Without this, deploy 1 cannot be verified. When the ConfigCat setting and the
+bundled document are byte-identical, which is exactly the state deploy 1 starts
+in, behavior alone cannot distinguish a working ConfigCat path from a silent
+fallback to the bundle.
+
+Every discarded candidate logs at error level with the reason, so a malformed
+dashboard edit is visible even though it causes no user-facing failure.
+
 ## Failure matrix
 
 | Condition | Behavior | Impact |
 |---|---|---|
 | CDN down, isolate warm | Background refresh fails and logs. `compiled` retained. | None |
 | CDN down, isolate cold, SDK cache in KV populated | `getValueAsync` returns cached config. Compile and serve. | None |
-| CDN down, isolate cold, SDK cache empty | Sentinel returned. Read `lkg`. Compile and serve. | None |
-| CDN down, isolate cold, both KV keys empty | Nothing to serve. | 503 |
-| Malformed config, isolate warm | Schema or `compileGateway` throws. `compiled` retained, error logged. | None |
-| Malformed config, isolate cold | Validation fails. Fall through to `lkg`. | None |
+| CDN down, isolate cold, SDK cache empty | Sentinel returned. Ladder falls to `lkg`. Compile and serve. | None |
+| CDN down, isolate cold, every candidate empty | Nothing to serve. | 503 |
+| Malformed config, isolate warm | Schema or `compileGateway` throws. `compiled` retained, error logged, short backoff applied. | None |
+| Malformed config, isolate cold | Candidate 1 is discarded on validation failure. Ladder falls to `lkg`. | None |
 | KV down, isolate warm | SDK logs a cache read error and keeps its in-memory config. `compiled` retained. | None |
-| KV down, isolate cold | Sentinel, then `lkg` read fails. Inline `forceRefreshAsync` recovers. | One slow request |
+| KV down, isolate cold | Candidates 1 and 2 unavailable. Bounded inline `forceRefreshAsync` recovers. | One slow request |
+| Refresh truncated by isolate eviction | `compiled` retained, backoff unset. Next request retries. | None |
+| Slow refresh completes after a newer one | Generation counter has advanced, so the stale result is discarded. | None |
 
 The malformed-config rows are the reason `lkg` exists as a separate key. A bad
 dashboard edit is written into the SDK's KV cache as a legitimate config,
@@ -212,16 +302,18 @@ Deploy 1:
    minified current config in every environment.
 2. Create the KV namespace and add the binding to `wrangler.toml`.
 3. `wrangler secret put CONFIGCAT_SDK_KEY`.
-4. Ship `src/config/source.ts` with `src/config.json` still bundled, used as
-   the fallback value in place of the sentinel.
-5. Verify in production that routes resolve from ConfigCat and that
-   `lkg:gateway_config` is populated in KV.
+4. Ship `src/config/source.ts` with `src/config.json` still bundled as the
+   explicit final candidate in the ladder. The sentinel default is in place
+   from the start, so deploy 1 exercises the same resolution algorithm that
+   deploy 2 will run.
+5. Verify in production, using the adopted-source log line, that config
+   resolved from ConfigCat rather than the bundled candidate, and that
+   `lkg:<gatewayName>:gateway_config` is populated in KV.
 
 Deploy 2:
 
-1. Delete `src/config.json`.
-2. Switch the fallback to the sentinel.
-3. Update docs.
+1. Delete `src/config.json` and remove the final ladder candidate.
+2. Update docs.
 
 The extra deploy removes the window where a bootstrap mistake produces a hard
 503 with no bundled config to fall back on. The end state is unchanged.
@@ -265,10 +357,12 @@ staleness predates this change and is resolved incidentally.
   validation plus `compileGateway` prevent a malformed edit from breaking the
   gateway, but they cannot prevent a well-formed edit that is wrong, such as
   pointing a route at the wrong upstream.
-- Each cold isolate writes the same `lkg` key once. KV allows one write per
-  second per key, so a burst of cold starts drops some writes. Those failures
-  are swallowed and harmless, because the value written is identical. An ETag
-  guard can be added later if it ever matters.
+- Refresh fan-out. One refresh per isolate per minute means traffic spread
+  across many isolates produces proportional load on the ConfigCat CDN, with
+  rate limiting a possible result. Jitter on the refresh window spreads the
+  load. If refresh volume proves material in practice, the mitigation is to
+  centralize refreshes in a scheduled worker and have request isolates read
+  only from KV. That is deliberately not built now.
 - Under very low traffic, most isolates are cold and serve whatever KV holds.
   Staleness stays bounded near 60 seconds plus KV eventual consistency, because
   background refreshes write fresh config back to KV for the next cold isolate.
