@@ -5,7 +5,7 @@
 ## one, but with custom configuration values for each different gateway.
 ## The values shown here are just an example for testing purposes.
 
-name = "cf-api-gateway-2" # usually the name of the gateway for each user
+name = "cf-api-gateway" # usually the name of the gateway for each user
 main = "src/index.ts"
 compatibility_date = "2026-03-13"
 compatibility_flags = ["nodejs_compat"]
