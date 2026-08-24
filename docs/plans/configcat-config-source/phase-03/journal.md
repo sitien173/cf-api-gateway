@@ -18,11 +18,31 @@ sections.
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-08-24
-- Finished: pending
+- Finished: 2026-08-24T11:40:09+07:00
 
 ## Implementation Response
 
-<!-- Worker appends the full `# EXTERNAL RESPONSE` block here. -->
+# EXTERNAL RESPONSE
+## META
+- Phase 3 / Started 2026-08-24 / Finished 2026-08-24T11:40:09+07:00 / Plan dir docs/plans/configcat-config-source
+## SUMMARY
+Implemented the isolate-local gateway resolver with ordered candidate fallback, refresh gating, generation protection, and fresh-refresh LKG persistence.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Created | src/config/source.ts | Added resolver state, candidate ladder, refresh gate, adoption logging, and LKG write qualification. |
+| Created | test/config-source.test.ts | Added resolver, fallback, concurrency, backoff, jitter, and logging tests. |
+| Modified | src/gateway/types.ts | Added resolver log fields and made log method optional. |
+| Updated | docs/plans/configcat-config-source/phase-03/notes.md | Recorded task decisions and RED-to-GREEN evidence. |
+| Updated | docs/plans/configcat-config-source/phase-03/journal.md | Recorded implementation response and completion metadata. |
+## NOTES
+- phase-03/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4)
+## SPEC COMPLIANCE
+- Meets Spec? YES — Typecheck and all 57 tests pass; Phase 4 wiring remains untouched.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
 
 ## Quality Review
 

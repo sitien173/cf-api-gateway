@@ -92,13 +92,16 @@ export type GatewayLogEvent = {
   level: GatewayLogLevel;
   stage: string;
   outcome: string;
-  method: string;
+  method?: string;
   routePath?: string;
   routeMethod?: string;
   originType?: string;
   policyName?: string;
   status?: number;
   latencyMs?: number;
+  configSource?: string;
+  configHash?: string;
+  reason?: string;
 };
 
 export type GatewayLogger = (event: GatewayLogEvent) => void;
