@@ -46,15 +46,13 @@ test("rejects a route whose request policies are not an array", () => {
 });
 
 test("rejects a route missing origin.type", () => {
+  const { type: _type, ...originWithoutType } = config.routes[0].origin;
   const value = {
     ...config,
     routes: [
       {
         ...config.routes[0],
-        origin: {
-          ...config.routes[0].origin,
-          type: undefined,
-        },
+        origin: originWithoutType,
       },
     ],
   };
@@ -63,5 +61,6 @@ test("rejects a route missing origin.type", () => {
   assert.equal(result.valid, false);
   if (!result.valid) {
     assert.ok(result.errors.length > 0);
+    assert.ok(result.errors.some((error) => error.keyword === "required"));
   }
 });
