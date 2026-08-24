@@ -18,7 +18,7 @@ sections.
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-08-24
-- Finished: 2026-08-24T10:55:41+07:00
+- Finished: 2026-08-24T11:04:34+07:00
 
 ## Implementation Response
 
@@ -38,6 +38,26 @@ Added shape-only JSON Schema validation for gateway routing documents, with type
 - phase-01/notes.md (## Task 1, ## Task 2, ## Task 3)
 ## SPEC COMPLIANCE
 - Meets Spec? YES — Shape-only validation is implemented without origin, policy, or method enums; required checks pass.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase 1 fix / Started 2026-08-24T11:04:34+07:00 / Finished 2026-08-24T11:04:34+07:00 / Plan dir docs/plans/configcat-config-source
+## SUMMARY
+Corrected the missing-origin-type fixture to omit the property and asserted the schema-required validation error.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Updated | test/config-schema.test.ts | Removed `origin.type` from the malformed fixture and asserted a `required` error. |
+| Updated | docs/plans/configcat-config-source/phase-01/notes.md | Added the Task 4 fix evidence. |
+| Updated | docs/plans/configcat-config-source/phase-01/journal.md | Appended this implementation response. |
+## NOTES
+- phase-01/notes.md (## Task 4)
+## SPEC COMPLIANCE
+- Meets Spec? YES — The test now verifies the schema's required-property rule directly.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT

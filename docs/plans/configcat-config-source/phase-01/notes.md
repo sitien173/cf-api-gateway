@@ -72,3 +72,25 @@ block even if all `none`.
 ### Test evidence
 - RED -> GREEN: Added one valid-document test and three malformed-document tests; full `npm test` passes with 42 tests passing.
 - Root cause (bugfix only): none
+
+## Task 4
+
+### Decisions made
+- Rebuilt the missing `origin.type` fixture by destructuring the key away rather than assigning `undefined`.
+- Asserted that the validation errors include a `required` keyword entry.
+
+### Spec deviations
+- none
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- none
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Review identified that the prior fixture triggered the validator's unsupported-`undefined` path; after removing the key and asserting `required`, `npm run typecheck` passed and `npm test` passed all 42 tests.
+- Root cause (bugfix only): The prior test retained the `type` property with an `undefined` value, so it did not exercise the schema's required-property rule.
