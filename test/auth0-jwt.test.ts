@@ -6,7 +6,8 @@ import { Readable } from "node:stream";
 import * as jose from "jose";
 
 import { compileGateway, executeGatewayRequest } from "../src/gateway/index.ts";
-import { auth0jwt } from "../src/policies/request/auth0-jwt.ts";
+import * as requestPolicies from "../src/policies/request/index.ts";
+import { apiKeyOrAuth0 } from "../src/policies/request/auth0-jwt.ts";
 
 const issuer = "https://tenant.example.com/";
 const audience = "https://api.example.com";
@@ -61,12 +62,12 @@ const withMockedJwks = async <T>(
   }
 };
 
-test("auth0jwt accepts a trimmed API key without Auth0 configuration", async () => {
+test("apiKeyOrAuth0 accepts a trimmed API key without Auth0 configuration", async () => {
   const request = new Request("https://gateway.example.com/orders", {
     headers: { "X-API-Key": "  valid-key  " },
   });
 
-  const response = await auth0jwt(
+  const response = await apiKeyOrAuth0(
     request,
     {},
     { GATEWAY_API_KEY: " , valid-key,another-key " },
@@ -75,12 +76,12 @@ test("auth0jwt accepts a trimmed API key without Auth0 configuration", async () 
   assert.equal(response, request);
 });
 
-test("auth0jwt rejects an invalid API key without falling back to JWT", async () => {
+test("apiKeyOrAuth0 rejects an invalid API key without falling back to JWT", async () => {
   const validIssuer = "https://api-key-tenant.example.com/";
   const fixture = await createTokenFixture(validIssuer);
 
   await withMockedJwks(fixture.jwks, async (resolverCalls) => {
-    const response = await auth0jwt(
+    const response = await apiKeyOrAuth0(
       new Request("https://gateway.example.com/orders", {
         headers: {
           "X-API-Key": "invalid-key",
@@ -100,8 +101,8 @@ test("auth0jwt rejects an invalid API key without falling back to JWT", async ()
   });
 });
 
-test("auth0jwt returns 500 when Auth0 bindings are missing", async () => {
-  const response = await auth0jwt(
+test("apiKeyOrAuth0 returns 500 when Auth0 bindings are missing", async () => {
+  const response = await apiKeyOrAuth0(
     new Request("https://gateway.example.com/orders", {
       headers: { authorization: "Bearer token" },
     }),
@@ -112,8 +113,8 @@ test("auth0jwt returns 500 when Auth0 bindings are missing", async () => {
   assert.equal(response.status, 500);
 });
 
-test("auth0jwt rejects HTTP issuer configuration", async () => {
-  const response = await auth0jwt(
+test("apiKeyOrAuth0 rejects HTTP issuer configuration", async () => {
+  const response = await apiKeyOrAuth0(
     new Request("https://gateway.example.com/orders", {
       headers: { authorization: "Bearer token" },
     }),
@@ -124,11 +125,11 @@ test("auth0jwt rejects HTTP issuer configuration", async () => {
   assert.equal(response.status, 500);
 });
 
-test("auth0jwt returns 401 for missing and invalid bearer tokens", async () => {
+test("apiKeyOrAuth0 returns 401 for missing and invalid bearer tokens", async () => {
   const env = { AUTH0_ISSUER: issuer, AUTH0_AUDIENCE: audience };
 
-  const missing = await auth0jwt(new Request("https://gateway.example.com/orders"), {}, env);
-  const invalid = await auth0jwt(
+  const missing = await apiKeyOrAuth0(new Request("https://gateway.example.com/orders"), {}, env);
+  const invalid = await apiKeyOrAuth0(
     new Request("https://gateway.example.com/orders", {
       headers: { authorization: "Bearer invalid-token" },
     }),
@@ -140,11 +141,11 @@ test("auth0jwt returns 401 for missing and invalid bearer tokens", async () => {
   assert.equal(invalid.status, 401);
 });
 
-test("auth0jwt caches JWK resolvers by normalized JWKS URL", async () => {
+test("apiKeyOrAuth0 caches JWK resolvers by normalized JWKS URL", async () => {
   const cacheIssuer = "https://cache-tenant.example.com/";
   const fixture = await createTokenFixture(cacheIssuer);
   await withMockedJwks(fixture.jwks, async (resolverCalls) => {
-    const first = await auth0jwt(
+    const first = await apiKeyOrAuth0(
       new Request("https://gateway.example.com/orders", {
         headers: { authorization: `Bearer ${fixture.token}` },
       }),
@@ -152,7 +153,7 @@ test("auth0jwt caches JWK resolvers by normalized JWKS URL", async () => {
       { AUTH0_ISSUER: cacheIssuer.slice(0, -1), AUTH0_AUDIENCE: audience },
     );
     assert.equal(resolverCalls(), 1);
-    const second = await auth0jwt(
+    const second = await apiKeyOrAuth0(
       new Request("https://gateway.example.com/orders", {
         headers: { authorization: `Bearer ${fixture.token}` },
       }),
@@ -203,7 +204,7 @@ test("request policies receive the Worker environment", async () => {
   assert.equal(receivedEnv, env);
 });
 
-test("unsafe routes require a policy configured with type auth0jwt", () => {
+test("unsafe routes require a policy configured with type apiKeyOrAuth0", () => {
   const route = (method: string, request: string[] = []) => ({
     path: "/api/resource",
     method,
@@ -222,18 +223,56 @@ test("unsafe routes require a policy configured with type auth0jwt", () => {
         policies: [{ name: "named-auth", type: "namedAuth" }],
         routes: [route(method, ["named-auth"])],
       }, handlers),
-      /auth0jwt/,
+      /apiKeyOrAuth0/,
     );
   }
 
   assert.doesNotThrow(() => compileGateway({
-    policies: [{ name: "jwt-policy", type: "auth0jwt" }],
+    policies: [{ name: "jwt-policy", type: "apiKeyOrAuth0" }],
     routes: [route("POST", ["jwt-policy"])],
   }, {
     ...handlers,
-    requestPolicies: { auth0jwt: handlers.requestPolicies.namedAuth },
+    requestPolicies: { apiKeyOrAuth0: handlers.requestPolicies.namedAuth },
   }));
   assert.doesNotThrow(() => compileGateway({ policies: [], routes: [route("GET"), route("OPTIONS")] }, handlers));
+});
+
+test("apiKeyOrAuth0 uses the production request-policy barrel", async () => {
+  let originCalls = 0;
+  const gateway = compileGateway(
+    {
+      policies: [{ name: "require-api-key-or-auth0", type: "apiKeyOrAuth0" }],
+      routes: [{
+        path: "/api/resource",
+        method: "POST",
+        origin: { type: "url", options: {} },
+        policies: { request: ["require-api-key-or-auth0"], response: [] },
+      }],
+    },
+    {
+      requestPolicies,
+      responsePolicies: {},
+      origins: {
+        url: async () => {
+          originCalls += 1;
+          return new Response("ok");
+        },
+      },
+    },
+  );
+
+  const response = await executeGatewayRequest(
+    gateway,
+    new Request("https://gateway.example.com/api/resource", {
+      method: "POST",
+      headers: { "X-API-Key": "client-key" },
+    }),
+    { GATEWAY_API_KEY: "client-key" },
+    createContext(),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(originCalls, 1);
 });
 
 test("valid Auth0 tokens reach mutation origins while OPTIONS stays public", async () => {
@@ -244,7 +283,7 @@ test("valid Auth0 tokens reach mutation origins while OPTIONS stays public", asy
   await withMockedJwks(fixture.jwks, async () => {
     const gateway = compileGateway(
       {
-        policies: [{ name: "require-auth", type: "auth0jwt" }],
+        policies: [{ name: "require-auth", type: "apiKeyOrAuth0" }],
         routes: [
           {
             path: "/api/resource",
@@ -261,7 +300,7 @@ test("valid Auth0 tokens reach mutation origins while OPTIONS stays public", asy
         ],
       },
       {
-        requestPolicies: { auth0jwt },
+        requestPolicies: { apiKeyOrAuth0 },
         responsePolicies: {},
         origins: { url: async () => {
           originCalls += 1;

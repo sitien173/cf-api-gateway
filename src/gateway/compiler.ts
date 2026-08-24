@@ -79,12 +79,12 @@ export const compileGateway = (
       handlers.requestPolicies,
     );
     const requiresAuth = !publicMethods.has(route.method.toUpperCase());
-    const hasAuth0Policy = route.policies.request.some(
-      (name) => policyDefinitions.get(name)?.type === "auth0jwt",
+    const hasGatewayAuthPolicy = route.policies.request.some(
+      (name) => policyDefinitions.get(name)?.type === "apiKeyOrAuth0",
     );
 
-    if (requiresAuth && !hasAuth0Policy) {
-      throw new Error(`Route ${route.method} ${route.path} must use an auth0jwt policy`);
+    if (requiresAuth && !hasGatewayAuthPolicy) {
+      throw new Error(`Route ${route.method} ${route.path} must use an apiKeyOrAuth0 policy`);
     }
 
     return {

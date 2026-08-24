@@ -43,7 +43,7 @@ const getRemoteJwkSet = (jwksUrl: string): RemoteJwkSet => {
   return remoteJwkSet;
 };
 
-export const auth0jwt: TRequestPolicyHandler = async (
+export const apiKeyOrAuth0: TRequestPolicyHandler = async (
   request: IRequest,
   _options: unknown,
   env: RequestPolicyEnv,

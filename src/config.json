@@ -378,7 +378,7 @@
     },
     {
       "name": "require-auth0",
-      "type": "auth0jwt",
+      "type": "apiKeyOrAuth0",
       "options": {}
     }
   ]
