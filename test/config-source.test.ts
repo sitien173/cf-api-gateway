@@ -18,6 +18,18 @@ const validRaw = JSON.stringify({
   policies: [],
 });
 
+const refreshedRaw = JSON.stringify({
+  routes: [
+    {
+      path: "/refreshed",
+      method: "GET",
+      origin: { type: "url" },
+      policies: { request: [], response: [] },
+    },
+  ],
+  policies: [],
+});
+
 const handlers = {
   requestPolicies: {},
   responsePolicies: {},
@@ -212,20 +224,81 @@ test("concurrent cold requests share one candidate ladder and refresh", async ()
   });
   const resolver = createGatewayResolver();
   const context = createContext();
-  const dependencies = resolverDependencies(client);
-
-  const first = resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+  const adoptions: string[] = [];
+  const dependencies = resolverDependencies(client, {
+    logEvent: (event) => {
+      if (event.outcome === "candidate_adopted" && event.configSource) {
+        adoptions.push(event.configSource);
+      }
+    },
+  });
+  let firstSettled = false;
+  const first = resolver
+    .resolve(createEnv(kv), context.ctx, handlers, dependencies)
+    .then((result) => {
+      firstSettled = true;
+      return result;
+    });
   for (let index = 0; index < 6; index += 1) {
     await Promise.resolve();
   }
   const second = resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
 
   assert.equal(client.forceRefreshCalls, 1);
+  assert.equal(firstSettled, false);
+  assert.equal(adoptions.length, 0);
   releaseRefresh();
   const [firstResult, secondResult] = await Promise.all([first, second]);
 
   assert.ok(firstResult);
   assert.strictEqual(secondResult, firstResult);
+  assert.deepEqual(adoptions, ["inline-refresh"]);
+});
+
+test("single-flight warm refresh preserves the compiled gateway until adoption", async () => {
+  const kv = createKv();
+  const client = createClient(validRaw);
+  let releaseRefresh!: () => void;
+  const refreshReleased = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  client.setForceRefresh(async () => {
+    await refreshReleased;
+    client.setValue(refreshedRaw);
+    return { isSuccess: true };
+  });
+  let now = 1000;
+  const context = createContext();
+  const adopted: string[] = [];
+  const dependencies = resolverDependencies(client, {
+    now: () => now,
+    logEvent: (event) => {
+      if (event.outcome === "candidate_adopted" && event.configSource) {
+        adopted.push(event.configSource);
+      }
+    },
+  });
+  const resolver = createGatewayResolver();
+  const initial = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+
+  now = 61000;
+  const refreshing = resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+  const whileRefreshing = await resolver.resolve(
+    createEnv(kv),
+    context.ctx,
+    handlers,
+    dependencies,
+  );
+
+  assert.strictEqual(whileRefreshing, initial);
+  assert.equal(client.forceRefreshCalls, 1);
+  assert.deepEqual(adopted, ["configcat"]);
+  releaseRefresh();
+  await refreshing;
+  await context.flush();
+
+  assert.equal(client.forceRefreshCalls, 1);
+  assert.deepEqual(adopted, ["configcat", "inline-refresh"]);
 });
 
 test("failed background refresh uses a five-second retry window", async () => {
@@ -271,20 +344,55 @@ test("does not write lkg for a KV or bundled candidate", async () => {
   assert.equal(kv.putCalls, 0);
 });
 
-test("returns undefined when every candidate fails", async () => {
+test("does not write lkg when the bundled candidate is adopted", async () => {
   const kv = createKv();
-  const client = createClient("not-json");
-  client.setForceRefresh(async () => ({ isSuccess: false }));
+  const client = createClient(undefined);
+  const adopted: string[] = [];
   const resolver = createGatewayResolver();
-
   const result = await resolver.resolve(
     createEnv(kv),
     createContext().ctx,
     handlers,
-    resolverDependencies(client, { finalCandidate: "also-not-json" }),
+    resolverDependencies(client, {
+      finalCandidate: JSON.parse(validRaw),
+      logEvent: (event) => {
+        if (event.outcome === "candidate_adopted" && event.configSource) {
+          adopted.push(event.configSource);
+        }
+      },
+    }),
   );
 
-  assert.equal(result, undefined);
+  assert.ok(result);
+  assert.deepEqual(adopted, ["bundled"]);
+  assert.equal(kv.putCalls, 0);
+});
+
+test("returns undefined when every candidate fails and backs off retries", async () => {
+  const kv = createKv();
+  const client = createClient("not-json");
+  client.setForceRefresh(async () => ({ isSuccess: false }));
+  const resolver = createGatewayResolver();
+  let now = 1000;
+  const dependencies = resolverDependencies(client, {
+    now: () => now,
+    finalCandidate: "also-not-json",
+  });
+  const context = createContext();
+
+  const firstResult = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+  assert.equal(firstResult, undefined);
+  assert.equal(client.forceRefreshCalls, 1);
+
+  now = 5999;
+  const withinWindow = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+  assert.equal(withinWindow, undefined);
+  assert.equal(client.forceRefreshCalls, 1);
+
+  now = 6001;
+  const afterWindow = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+  assert.equal(afterWindow, undefined);
+  assert.equal(client.forceRefreshCalls, 2);
 });
 
 test("logs the adopted candidate and a deterministic document hash", async () => {

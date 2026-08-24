@@ -210,10 +210,8 @@ const getInlineRefreshCandidate = async (
 export const createGatewayResolver = () => {
   let client: IConfigCatClient | undefined;
   let compiled: CompiledGateway | undefined;
-  let lastRaw: string | undefined;
   let nextRefreshMs = 0;
   let refreshInFlight: Promise<boolean> | undefined;
-  let generation = 0;
 
   const getClient = (
     env: ResolverEnv,
@@ -245,7 +243,6 @@ export const createGatewayResolver = () => {
 
   const adopt = (candidate: Candidate): void => {
     compiled = candidate.compiled;
-    lastRaw = candidate.raw;
   };
 
   const resolveCold = async (
@@ -348,7 +345,6 @@ export const createGatewayResolver = () => {
     dependencies: ResolveGatewayDependencies,
     cold: boolean,
   ): Promise<boolean> => {
-    const capturedGeneration = ++generation;
     let refreshPromise!: Promise<boolean>;
 
     refreshPromise = (async () => {
@@ -356,10 +352,6 @@ export const createGatewayResolver = () => {
         const result = cold
           ? await resolveCold(env, handlers, dependencies)
           : await resolveRefresh(env, handlers, dependencies);
-
-        if (capturedGeneration !== generation) {
-          return false;
-        }
 
         if (!result.accepted || !result.candidate) {
           nextRefreshMs = getNow(dependencies) + FAILURE_BACKOFF_MS;
@@ -376,9 +368,7 @@ export const createGatewayResolver = () => {
         return true;
       } catch (error) {
         logCandidateFailure(dependencies, cold ? "configcat" : "inline-refresh", errorMessage(error));
-        if (capturedGeneration === generation) {
-          nextRefreshMs = getNow(dependencies) + FAILURE_BACKOFF_MS;
-        }
+        nextRefreshMs = getNow(dependencies) + FAILURE_BACKOFF_MS;
         return false;
       } finally {
         if (refreshInFlight === refreshPromise) {
@@ -398,7 +388,7 @@ export const createGatewayResolver = () => {
     dependencies: ResolveGatewayDependencies = {},
   ): Promise<CompiledGateway | undefined> => {
     const now = getNow(dependencies);
-    if (compiled && now < nextRefreshMs) {
+    if (nextRefreshMs !== 0 && now < nextRefreshMs) {
       return compiled;
     }
 

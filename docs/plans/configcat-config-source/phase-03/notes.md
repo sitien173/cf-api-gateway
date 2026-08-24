@@ -94,3 +94,24 @@ block even if all `none`.
 ### Test evidence
 - RED -> GREEN: Tests verify fresh inline LKG writes, no writes for KV/bundled candidates, and deterministic adopted-source/hash logs; final checks pass 57/57.
 - Root cause (bugfix only): none
+
+## Task 5
+
+### Decisions made
+- Applied the review fixes by honoring the failure backoff even when `compiled` is undefined, removing the dead generation and `lastRaw` state, and adding explicit bundled-candidate coverage.
+
+### Spec deviations
+- Removed the generation counter and stale-result guard as an approved deviation: the single-flight `refreshInFlight` gate prevents overlapping refreshes and provides the same protection without unreachable state.
+
+### Tradeoffs accepted
+- none
+
+### Assumptions
+- `nextRefreshMs === 0` denotes an uninitialized refresh window and must not suppress the first cold resolution.
+
+### Follow-ups for human
+- none
+
+### Test evidence
+- RED -> GREEN: Added failure-backoff, single-flight adoption, and bundled-candidate tests; `npm run typecheck` passed and `npm test` passed all 59 tests.
+- Root cause (bugfix only): Cold failure backoff was bypassed when no compiled gateway existed; generation and `lastRaw` were dead state; bundled adoption had no dedicated no-write assertion.

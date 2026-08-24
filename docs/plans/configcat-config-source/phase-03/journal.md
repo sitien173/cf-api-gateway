@@ -18,7 +18,7 @@ sections.
 - Implementation Job: pending
 - Review Job: pending
 - Started: 2026-08-24
-- Finished: 2026-08-24T11:40:09+07:00
+- Finished: 2026-08-24T11:47:29+07:00
 
 ## Implementation Response
 
@@ -39,6 +39,27 @@ Implemented the isolate-local gateway resolver with ordered candidate fallback, 
 - phase-03/notes.md (## Task 1, ## Task 2, ## Task 3, ## Task 4)
 ## SPEC COMPLIANCE
 - Meets Spec? YES — Typecheck and all 57 tests pass; Phase 4 wiring remains untouched.
+## CLARIFICATIONS NEEDED
+None
+## NEXT
+TASK_COMPLETE
+
+# EXTERNAL RESPONSE
+## META
+- Phase 3 fix / Started 2026-08-24T11:46:29+07:00 / Finished 2026-08-24T11:47:29+07:00 / Plan dir docs/plans/configcat-config-source
+## SUMMARY
+Fixed cold failure backoff, removed dead generation and raw state, and added bundled-candidate single-flight coverage.
+## FILES MODIFIED
+| Action | Path | Change |
+|---|---|---|
+| Updated | src/config/source.ts | Applied backoff to cold failures regardless of compiled state and removed generation/`lastRaw` state. |
+| Updated | test/config-source.test.ts | Added failure-window, single-flight adoption, and bundled no-write assertions. |
+| Updated | docs/plans/configcat-config-source/phase-03/notes.md | Recorded Task 5 and the approved generation deviation. |
+| Updated | docs/plans/configcat-config-source/phase-03/journal.md | Appended this fix response. |
+## NOTES
+- phase-03/notes.md (## Task 5)
+## SPEC COMPLIANCE
+- Meets Spec? YES — Review findings are fixed; generation removal is recorded as an approved deviation; both checks pass.
 ## CLARIFICATIONS NEEDED
 None
 ## NEXT
