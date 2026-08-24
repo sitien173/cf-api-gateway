@@ -61,6 +61,45 @@ const withMockedJwks = async <T>(
   }
 };
 
+test("auth0jwt accepts a trimmed API key without Auth0 configuration", async () => {
+  const request = new Request("https://gateway.example.com/orders", {
+    headers: { "X-API-Key": "  valid-key  " },
+  });
+
+  const response = await auth0jwt(
+    request,
+    {},
+    { GATEWAY_API_KEY: " , valid-key,another-key " },
+  );
+
+  assert.equal(response, request);
+});
+
+test("auth0jwt rejects an invalid API key without falling back to JWT", async () => {
+  const validIssuer = "https://api-key-tenant.example.com/";
+  const fixture = await createTokenFixture(validIssuer);
+
+  await withMockedJwks(fixture.jwks, async (resolverCalls) => {
+    const response = await auth0jwt(
+      new Request("https://gateway.example.com/orders", {
+        headers: {
+          "X-API-Key": "invalid-key",
+          authorization: `Bearer ${fixture.token}`,
+        },
+      }),
+      {},
+      {
+        AUTH0_ISSUER: validIssuer,
+        AUTH0_AUDIENCE: audience,
+        GATEWAY_API_KEY: "valid-key",
+      },
+    );
+
+    assert.equal(response.status, 401);
+    assert.equal(resolverCalls(), 0);
+  });
+});
+
 test("auth0jwt returns 500 when Auth0 bindings are missing", async () => {
   const response = await auth0jwt(
     new Request("https://gateway.example.com/orders", {

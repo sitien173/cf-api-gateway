@@ -48,6 +48,22 @@ export const auth0jwt: TRequestPolicyHandler = async (
   _options: unknown,
   env: RequestPolicyEnv,
 ) => {
+  const apiKey = request.headers.get("X-API-Key");
+  if (apiKey !== null) {
+    const validApiKeys = typeof env.GATEWAY_API_KEY === "string"
+      ? env.GATEWAY_API_KEY
+        .split(",")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+      : [];
+
+    if (validApiKeys.includes(apiKey.trim())) {
+      return request;
+    }
+
+    return new ErrorResponse("API key is invalid", 401);
+  }
+
   const auth0Issuer = env.AUTH0_ISSUER;
   const auth0Audience = env.AUTH0_AUDIENCE;
   const normalizedIssuer = auth0Issuer ? normalizeIssuer(auth0Issuer) : undefined;
