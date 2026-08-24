@@ -14,6 +14,10 @@ analytics_engine_datasets = [
   { binding = "API_ANALYTICS" }
 ]
 
+[[kv_namespaces]]
+binding = "GATEWAY_CONFIG"
+id = "c101ca543a654b0dbeb6a227fbede546"
+
 [vars] # local testing stuff, the production values are set from the API server
 GATEWAY_NAME = "cf-api-gateway"
 ANALYTICS_ENABLED = "true"

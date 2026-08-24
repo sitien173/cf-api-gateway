@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { executeUnavailableRequest } from "../src/index.ts";
 import {
   compileGateway,
   executeGatewayRequest,
@@ -484,6 +485,50 @@ test("executeGatewayRequest finalizes route misses as 404 responses", async () =
       ["route_resolution", "route_miss", 404],
       ["analytics", "scheduled", 404],
       ["response_finalization", "completed", 404],
+    ],
+  );
+});
+
+test("configuration resolution failures finalize as 503 with analytics and logs", async () => {
+  const analytics: number[] = [];
+  const logs: Array<{ stage: string; outcome: string; status?: number }> = [];
+  const { ctx, flush } = createContext();
+  const request = new Request("https://gateway.example.com/unavailable", {
+    method: "OPTIONS",
+    headers: { "access-control-request-method": "GET" },
+  });
+
+  const response = await executeUnavailableRequest(
+    request,
+    { ANALYTICS_ENABLED: "true", GATEWAY_NAME: "test-gateway" },
+    ctx,
+    {
+      logEvent: (event) => {
+        logs.push({
+          stage: event.stage,
+          outcome: event.outcome,
+          status: event.status,
+        });
+      },
+      logAnalytics: async (event) => {
+        analytics.push(event.status);
+      },
+    },
+  );
+
+  await flush();
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(analytics, [503]);
+  assert.deepEqual(
+    logs.map((log) => [log.stage, log.outcome, log.status ?? null]),
+    [
+      ["request_received", "received", null],
+      ["route_resolution", "matched", null],
+      ["origin", "started", null],
+      ["origin", "completed", 503],
+      ["analytics", "scheduled", 503],
+      ["response_finalization", "completed", 503],
     ],
   );
 });
