@@ -28,6 +28,9 @@ type HealthCacheEntry = {
 
 const healthCache = new Map<string, HealthCacheEntry>();
 
+const healthCacheKey = (url: string, healthPath: string, timeout: number): string =>
+  `${url}\u0000${healthPath}\u0000${timeout}`;
+
 const canRetry = (method: string): boolean => retryableMethods.has(method);
 
 export const getHealthStatus = async (
@@ -37,7 +40,8 @@ export const getHealthStatus = async (
   cacheTtl: number,
 ): Promise<boolean> => {
   const now = Date.now();
-  const cached = healthCache.get(url);
+  const cacheKey = healthCacheKey(url, healthPath, timeout);
+  const cached = healthCache.get(cacheKey);
 
   if (cached?.refresh) {
     return cached.healthy ?? cached.refresh;
@@ -48,7 +52,7 @@ export const getHealthStatus = async (
   }
 
   const refresh = checkUpstreamHealth(url, healthPath, timeout).then((healthy) => {
-    healthCache.set(url, { healthy, timestamp: Date.now() });
+    healthCache.set(cacheKey, { healthy, timestamp: Date.now() });
     return healthy;
   });
   const entry: HealthCacheEntry = {
@@ -56,7 +60,7 @@ export const getHealthStatus = async (
     timestamp: cached?.timestamp ?? 0,
     refresh,
   };
-  healthCache.set(url, entry);
+  healthCache.set(cacheKey, entry);
 
   if (cached?.healthy !== undefined) {
     void refresh;

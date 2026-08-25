@@ -2,7 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { proxyAll, upstreamWithFallback } from "../src/origins/index.ts";
-import { checkUpstreamHealth, executeFailover } from "../src/origins/failover.ts";
+import {
+  checkUpstreamHealth,
+  executeFailover,
+  getHealthStatus,
+} from "../src/origins/failover.ts";
 
 const mutationScenarios = [
   {
@@ -89,6 +93,28 @@ test("non-retryable failover requests stream bodies with half duplex", async () 
     assert.equal(response.status, 200);
     assert.ok(upstreamRequest?.body);
     assert.equal((upstreamRequest as Request & { duplex?: string }).duplex, "half");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("health cache separates health paths for the same upstream", async () => {
+  const originalFetch = globalThis.fetch;
+  const baseUrl = "https://health-paths.example.com";
+  const calls: string[] = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const request = input instanceof Request ? input : new Request(input);
+    calls.push(request.url);
+    return request.url.endsWith("/health-a")
+      ? new Response("healthy", { status: 200 })
+      : new Response("unhealthy", { status: 503 });
+  }) as typeof fetch;
+
+  try {
+    assert.equal(await getHealthStatus(baseUrl, "/health-a", 5000, 60000), true);
+    assert.equal(await getHealthStatus(baseUrl, "/health-b", 5000, 60000), false);
+    assert.deepEqual(calls, [`${baseUrl}/health-a`, `${baseUrl}/health-b`]);
   } finally {
     globalThis.fetch = originalFetch;
   }
