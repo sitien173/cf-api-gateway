@@ -10,6 +10,38 @@ type NormalizedIssuer = {
 };
 
 const remoteJwkSets = new Map<string, RemoteJwkSet>();
+const apiKeyCache = new Map<string, string[]>();
+
+export const constantTimeEqual = (left: string, right: string): boolean => {
+  const leftBytes = new TextEncoder().encode(left);
+  const rightBytes = new TextEncoder().encode(right);
+  const length = Math.max(leftBytes.length, rightBytes.length);
+  let difference = leftBytes.length ^ rightBytes.length;
+
+  for (let index = 0; index < length; index += 1) {
+    difference |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
+  }
+
+  return difference === 0;
+};
+
+const getValidApiKeys = (raw: unknown): string[] => {
+  if (typeof raw !== "string") {
+    return [];
+  }
+
+  const cached = apiKeyCache.get(raw);
+  if (cached) {
+    return cached;
+  }
+
+  const parsed = raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  apiKeyCache.set(raw, parsed);
+  return parsed;
+};
 
 const normalizeIssuer = (value: string): NormalizedIssuer | undefined => {
   try {
@@ -50,14 +82,10 @@ export const apiKeyOrAuth0: TRequestPolicyHandler = async (
 ) => {
   const apiKey = request.headers.get("X-API-Key");
   if (apiKey !== null) {
-    const validApiKeys = typeof env.GATEWAY_API_KEY === "string"
-      ? env.GATEWAY_API_KEY
-        .split(",")
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0)
-      : [];
+    const presentedApiKey = apiKey.trim();
+    const validApiKeys = getValidApiKeys(env.GATEWAY_API_KEY);
 
-    if (validApiKeys.includes(apiKey.trim())) {
+    if (validApiKeys.some((validApiKey) => constantTimeEqual(validApiKey, presentedApiKey))) {
       return request;
     }
 

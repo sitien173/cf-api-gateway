@@ -42,7 +42,15 @@ const createUnavailableGateway = (request: IRequest): CompiledGateway => ({
       originType: "configuration-unavailable",
       matchMode: "exact",
       origin: {
-        handler: async () => new ErrorResponse("Gateway configuration unavailable", 503),
+        handler: async () =>
+          new Response("Gateway configuration unavailable", {
+            status: 503,
+            headers: {
+              "Access-Control-Allow-Origin": "*",
+              "Access-Control-Allow-Methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+              "Access-Control-Allow-Headers": "*",
+            },
+          }),
       },
       requestPolicies: [],
       responsePolicies: [],

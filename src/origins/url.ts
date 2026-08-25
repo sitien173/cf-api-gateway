@@ -41,7 +41,7 @@ export const url: TOriginHandler = async (
   request: IRequest,
   options: UrlOptions
 ) => {
-  const originRequest = new Request(buildOriginUrl(request, options), new Request(request));
+  const originRequest = new Request(buildOriginUrl(request, options), request);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), options.timeout ?? 5000);
 

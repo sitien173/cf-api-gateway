@@ -1,5 +1,6 @@
 import { IRequest, TRequestPolicyHandler } from "../../types";
 import { ErrorResponse } from "../../helpers/response";
+import { constantTimeEqual } from "./auth0-jwt";
 
 type basicAuthtOptions = {
   username: string;
@@ -15,13 +16,13 @@ export const basicAuth: TRequestPolicyHandler = async (
   if (!authHeader) {
     return new ErrorResponse("Authorization header is missing", 401);
   }
-  
-  const [authenticationType, encodedToken] = authHeader.split(" ");
-  if (authenticationType !== 'Basic' || authenticationType == undefined || encodedToken === undefined) {
+  const basicMatch = /^Basic\s+(\S+)$/i.exec(authHeader.trim());
+  if (!basicMatch) {
     return new ErrorResponse("Authorization format is incorrect. Correct format: 'Basic {base64({user}:{password})}'", 401);
   }
-  
-  if (btoa(options.username + ":" + options.password) !== encodedToken) {
+
+  const encodedToken = basicMatch[1];
+  if (!constantTimeEqual(btoa(options.username + ":" + options.password), encodedToken)) {
     return new ErrorResponse("Incorrect basic authentication", 401);
   }
 

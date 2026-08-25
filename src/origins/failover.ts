@@ -357,14 +357,14 @@ export const executeFailover = async ({
       return new ErrorResponse("All upstreams failed", 503);
     }
     onFallbackCompleted?.(fallbackResponse.status);
-    return wrapResponse(new Response(fallbackResponse.body, fallbackResponse));
+    return wrapResponse(fallbackResponse);
   }
 
   if (firstIsPrimary && firstResponse.status >= 500) {
     onPrimaryFailure?.(firstResponse.status);
 
     if (!shouldRetry) {
-      return wrapResponse(new Response(firstResponse.body, firstResponse));
+      return wrapResponse(firstResponse);
     }
 
     try {
@@ -387,8 +387,8 @@ export const executeFailover = async ({
       return new ErrorResponse("All upstreams failed", 503);
     }
     onFallbackCompleted?.(fallbackResponse.status);
-    return wrapResponse(new Response(fallbackResponse.body, fallbackResponse));
+    return wrapResponse(fallbackResponse);
   }
 
-  return wrapResponse(new Response(firstResponse.body, firstResponse));
+  return wrapResponse(firstResponse);
 };

@@ -114,6 +114,7 @@ export const compileGateway = (
       policyDefinitions,
       handlers.requestPolicies,
     );
+    // GET, HEAD, and OPTIONS routes are auth-optional by design; all other methods require gateway auth.
     const requiresAuth = !publicMethods.has(method);
     const hasGatewayAuthPolicy = route.policies.request.some(
       (name) => policyDefinitions.get(name)?.type === "apiKeyOrAuth0",

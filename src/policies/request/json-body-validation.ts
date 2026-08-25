@@ -1,6 +1,7 @@
 import { Validator } from "@cfworker/json-schema";
 import { IRequest, TRequestPolicyHandler } from "../../types";
 import { ErrorResponse } from "../../helpers/response";
+import { emitGatewayLog } from "../../gateway/logging";
 
 const validatorCache = new WeakMap<object, Validator>();
 type JsonBodyValidationHandler = TRequestPolicyHandler & {
@@ -38,10 +39,13 @@ const jsonBodyValidationHandler: JsonBodyValidationHandler = async (
       return request;
     }
 
-    return new ErrorResponse(
-      "Could not validate body against schema. " + result.errors[0].error,
-      400,
-    );
+    emitGatewayLog(undefined, {
+      level: "error",
+      stage: "request_policy",
+      outcome: "validation_failed",
+      reason: result.errors[0].error,
+    });
+    return new ErrorResponse("Could not validate body against schema", 400);
   } catch {
     return new ErrorResponse("Could not validate body against schema", 400);
   }

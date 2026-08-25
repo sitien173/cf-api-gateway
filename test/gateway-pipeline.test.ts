@@ -722,6 +722,25 @@ test("executeGatewayRequest finalizes route misses as 404 responses", async () =
   );
 });
 
+test("unavailable gateway responses include permissive CORS headers", async () => {
+  const { ctx, flush } = createContext();
+  const response = await executeUnavailableRequest(
+    new Request("https://gateway.example.com/unavailable"),
+    { ANALYTICS_ENABLED: "false", GATEWAY_NAME: "test-gateway" } as any,
+    ctx,
+  );
+
+  await flush();
+
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("Access-Control-Allow-Origin"), "*");
+  assert.equal(
+    response.headers.get("Access-Control-Allow-Methods"),
+    "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+  );
+  assert.equal(response.headers.get("Access-Control-Allow-Headers"), "*");
+});
+
 test("configuration resolution failures finalize as 503 with analytics and logs", async () => {
   const analytics: number[] = [];
   const logs: Array<{ stage: string; outcome: string; status?: number }> = [];

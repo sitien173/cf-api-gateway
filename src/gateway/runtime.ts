@@ -30,9 +30,9 @@ const matchesPrefix = (pathname: string, prefix: string): boolean => {
 const resolveRoute = (
   gateway: CompiledGateway,
   request: Request,
+  requestUrl: URL,
   methodOverride?: string,
 ): CompiledRoute | undefined => {
-  const requestUrl = new URL(request.url);
   const requestMethod = methodOverride ?? request.method;
   return gateway.routes.find((route) => {
     if (route.method !== requestMethod) {
@@ -55,6 +55,7 @@ const applyResponsePolicies = async (
 ): Promise<Response> => {
   let currentResponse = response;
 
+  // Origin handlers must return a constructed Response so policies can safely mutate its headers.
   for (const policy of route.responsePolicies) {
     const result = await policy.handler(currentResponse, policy.options, request);
     if (result instanceof Response) {
@@ -77,6 +78,7 @@ const applyResponsePolicies = async (
 const resolvePreflightRoute = (
   gateway: CompiledGateway,
   request: Request,
+  requestUrl: URL,
 ): CompiledRoute | undefined => {
   if (request.method !== "OPTIONS") {
     return undefined;
@@ -87,7 +89,7 @@ const resolvePreflightRoute = (
     return undefined;
   }
 
-  return resolveRoute(gateway, request, requestedMethod);
+  return resolveRoute(gateway, request, requestUrl, requestedMethod);
 };
 
 const finalizeResponse = (
@@ -109,9 +111,11 @@ const finalizeResponse = (
       status: response.status,
       latencyMs: latency,
     };
-    ctx.waitUntil(
-      Promise.resolve().then(() => logAnalytics(analyticsEvent, env)),
-    );
+    try {
+      ctx.waitUntil(Promise.resolve(logAnalytics(analyticsEvent, env)));
+    } catch (error) {
+      ctx.waitUntil(Promise.reject(error));
+    }
   }
 
   emitGatewayLog(dependencies.logEvent, {
@@ -140,6 +144,7 @@ export const executeGatewayRequest = async (
     logEvent: (event) =>
       emitGatewayLog(configuredLogEvent, event, env),
   };
+  const requestUrl = new URL(originalRequest.url);
   let route: CompiledRoute | undefined;
   let isPreflight = false;
 
@@ -151,9 +156,14 @@ export const executeGatewayRequest = async (
       ...createLogContext(originalRequest),
     });
 
-    const preflightRoute = resolvePreflightRoute(gateway, originalRequest);
+    const preflightRoute = resolvePreflightRoute(
+      gateway,
+      originalRequest,
+      requestUrl,
+    );
     isPreflight = preflightRoute !== undefined;
-    route = preflightRoute ?? resolveRoute(gateway, originalRequest);
+    route =
+      preflightRoute ?? resolveRoute(gateway, originalRequest, requestUrl);
 
     if (!route) {
       emitGatewayLog(dependencies.logEvent, {

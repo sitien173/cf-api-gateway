@@ -403,6 +403,7 @@ Configure the deployment secrets without committing their values:
 ```bash
 npx wrangler secret put AUTH0_ISSUER
 npx wrangler secret put AUTH0_AUDIENCE
+npx wrangler secret put GATEWAY_API_KEY
 ```
 
 `GET`, `HEAD`, and `OPTIONS` remain public. `POST`, `PUT`, `PATCH`, and `DELETE`

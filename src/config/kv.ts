@@ -123,6 +123,7 @@ export const writeLkg = async (
   }
 
   try {
+    // This read-then-write is not atomic; concurrent writers may race, and the newer timestamp guard is accepted here.
     const stored = await env.GATEWAY_CONFIG.get(key);
     if (stored != null && asEnvelope(stored).timestamp >= timestamp) {
       return false;
