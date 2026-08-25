@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { proxyAll, upstreamWithFallback, url } from "../src/origins/index.ts";
+import { emitGatewayLog } from "../src/gateway/logging.ts";
 
 type LoggedEvent = Record<string, unknown>;
 
@@ -31,6 +32,16 @@ const withCapturedConsole = async (
     console.error = originalError;
   }
 };
+
+test("emitGatewayLog suppresses info below the configured level", () => {
+  const events: Array<{ level: string }> = [];
+  const logger = (event: { level: string }) => events.push(event);
+
+  emitGatewayLog(logger, { level: "info" } as any, { GATEWAY_LOG_LEVEL: "error" });
+  emitGatewayLog(logger, { level: "error" } as any, { GATEWAY_LOG_LEVEL: "error" });
+
+  assert.deepEqual(events, [{ level: "error" }]);
+});
 
 test("proxyAll logs primary failure and fallback completion with structured context", async () => {
   const originalFetch = globalThis.fetch;
@@ -244,10 +255,7 @@ test("url origin preserves the incoming query string for fixed upstream paths", 
       assert.equal(response.status, 200);
       assert.deepEqual(
         logs.info.map((event) => [event.stage, event.outcome, event.status, event.method, event.originType]),
-        [
-          ["origin", "started", undefined, "GET", "url"],
-          ["origin", "completed", 200, "GET", "url"],
-        ],
+        [],
       );
     });
     assert.equal(

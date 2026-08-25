@@ -12,6 +12,9 @@ import type {
 const defaultNow = () => Date.now();
 const analyticsRouteMissLabel = "route_miss";
 
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
 const matchesPrefix = (pathname: string, prefix: string): boolean => {
   if (prefix === "/") {
     return pathname.startsWith("/");
@@ -100,14 +103,6 @@ const finalizeResponse = (
 
   const logAnalytics = dependencies.logAnalytics;
   if (logAnalytics) {
-    emitGatewayLog(dependencies.logEvent, {
-      level: "info",
-      stage: "analytics",
-      outcome: "scheduled",
-      ...createLogContext(request, route),
-      status: response.status,
-      latencyMs: latency,
-    });
     const analyticsEvent = {
       routePath: route?.path ?? analyticsRouteMissLabel,
       method: request.method,
@@ -139,6 +134,12 @@ export const executeGatewayRequest = async (
   dependencies: ExecutionDependencies = {},
 ): Promise<Response> => {
   const latencyStart = (dependencies.now ?? defaultNow)();
+  const configuredLogEvent = dependencies.logEvent;
+  dependencies = {
+    ...dependencies,
+    logEvent: (event) =>
+      emitGatewayLog(configuredLogEvent, event, env),
+  };
   let route: CompiledRoute | undefined;
   let isPreflight = false;
 
@@ -272,13 +273,14 @@ export const executeGatewayRequest = async (
       latencyStart,
       route,
     );
-  } catch {
+  } catch (error) {
     emitGatewayLog(dependencies.logEvent, {
       level: "error",
       stage: "execution",
       outcome: "failed",
       ...createLogContext(originalRequest, route),
       status: 500,
+      reason: errorMessage(error),
     });
 
     return finalizeResponse(

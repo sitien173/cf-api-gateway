@@ -190,10 +190,11 @@ test("falls through a corrupt lkg to one inline refresh and writes fresh lkg", a
   });
   const adopted: string[] = [];
   const resolver = createGatewayResolver();
+  const context = createContext();
 
   const result = await resolver.resolve(
     createEnv(kv),
-    createContext().ctx,
+    context.ctx,
     handlers,
     resolverDependencies(client, {
       logEvent: (event) => {
@@ -207,6 +208,8 @@ test("falls through a corrupt lkg to one inline refresh and writes fresh lkg", a
   assert.ok(result);
   assert.deepEqual(adopted, ["inline-refresh"]);
   assert.equal(client.forceRefreshCalls, 1);
+  assert.equal(context.pending.length, 1);
+  await context.flush();
   assert.equal(kv.putCalls, 1);
 });
 

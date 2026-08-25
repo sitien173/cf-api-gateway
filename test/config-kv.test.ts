@@ -70,6 +70,40 @@ test("ConfigCat cache scopes SDK keys and uses the KV cache TTL", async () => {
   ]);
 });
 
+test("ConfigCat cache skips byte-identical writes per key", async () => {
+  const kv = createFakeKv();
+  const env = createEnv("gateway-a", kv);
+  const cache = createConfigCatCache(env);
+  let putCalls = 0;
+  const originalPut = kv.put;
+  kv.put = async (key, value) => {
+    putCalls += 1;
+    await originalPut(key, value);
+  };
+
+  await cache.set("sdk-key", "same");
+  await cache.set("sdk-key", "same");
+  await cache.set("other-key", "same");
+  await cache.set("sdk-key", "different");
+
+  assert.equal(putCalls, 3);
+});
+
+test("readLkg uses the KV cache TTL", async () => {
+  const kv = createFakeKv();
+  const env = createEnv("gateway-a", kv);
+  let options: unknown;
+  const originalGet = kv.get;
+  kv.get = async (key, getOptions) => {
+    options = getOptions;
+    return originalGet(key, getOptions);
+  };
+
+  await readLkg(env);
+
+  assert.deepEqual(options, { cacheTtl: 60 });
+});
+
 test("readLkg handles missing, legacy, and corrupt values", async () => {
   const kv = createFakeKv();
   const env = createEnv("gateway-a", kv);

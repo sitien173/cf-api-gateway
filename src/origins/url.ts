@@ -46,13 +46,6 @@ export const url: TOriginHandler = async (
   const timeoutId = setTimeout(() => controller.abort(), options.timeout ?? 5000);
 
   try {
-    emitGatewayLog(undefined, {
-      level: "info",
-      stage: "origin",
-      outcome: "started",
-      ...createOriginLogContext(request, "url"),
-    });
-
     const originFetch = await fetch(originRequest.url, {
       method: originRequest.method,
       headers: originRequest.headers,
@@ -60,14 +53,6 @@ export const url: TOriginHandler = async (
       ...(originRequest.body ? { duplex: "half" as const } : {}),
       signal: controller.signal,
       redirect: "manual",
-    });
-
-    emitGatewayLog(undefined, {
-      level: "info",
-      stage: "origin",
-      outcome: "completed",
-      ...createOriginLogContext(request, "url"),
-      status: originFetch.status,
     });
 
     return new Response(originFetch.body, originFetch);

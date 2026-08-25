@@ -34,6 +34,8 @@ const logKvError = (operation: string, error: unknown): void => {
 };
 
 export class GatewayConfigCatCache implements IConfigCatCache {
+  private readonly lastWritten = new Map<string, string>();
+
   constructor(private readonly env: GatewayConfigEnv) {}
 
   async get(key: string): Promise<string | null | undefined> {
@@ -49,9 +51,13 @@ export class GatewayConfigCatCache implements IConfigCatCache {
 
   async set(key: string, value: string): Promise<void> {
     const scopedKey = getConfigCatCacheKey(this.env, key);
+    if (this.lastWritten.get(scopedKey) === value) {
+      return;
+    }
 
     try {
       await this.env.GATEWAY_CONFIG.put(scopedKey, value);
+      this.lastWritten.set(scopedKey, value);
     } catch (error) {
       logKvError("write", error);
     }
@@ -97,7 +103,7 @@ export const readLkg = async (
   const key = getLkgKey(env);
 
   try {
-    const stored = await env.GATEWAY_CONFIG.get(key);
+    const stored = await env.GATEWAY_CONFIG.get(key, { cacheTtl: 60 });
     return stored == null ? null : asEnvelope(stored);
   } catch (error) {
     logKvError("read", error);

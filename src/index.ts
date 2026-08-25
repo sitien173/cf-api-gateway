@@ -31,6 +31,9 @@ const gatewayHandlers = {
 };
 const resolver = createGatewayResolver();
 
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
 const createUnavailableGateway = (request: IRequest): CompiledGateway => ({
   routes: [
     {
@@ -93,7 +96,13 @@ export default {
       gateway = await resolver.resolve(env, ctx, gatewayHandlers, {
         finalCandidate: config,
       });
-    } catch {
+    } catch (error) {
+      emitGatewayLog(undefined, {
+        level: "error",
+        stage: "config_resolution",
+        outcome: "failed",
+        reason: errorMessage(error),
+      });
       gateway = undefined;
     }
 

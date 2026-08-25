@@ -1,4 +1,8 @@
-import type { CompiledRoute, GatewayLogger, GatewayLogEvent } from "./types";
+import type {
+  CompiledRoute,
+  GatewayLogger,
+  GatewayLogEvent,
+} from "./types";
 
 export const createLogContext = (
   request: Request,
@@ -21,7 +25,15 @@ export const createOriginLogContext = (
 export const emitGatewayLog = (
   logger: GatewayLogger | undefined,
   event: GatewayLogEvent,
+  env?: { GATEWAY_LOG_LEVEL?: string; [key: string]: any },
 ): void => {
+  if (
+    event.level === "info" &&
+    env?.GATEWAY_LOG_LEVEL?.toLowerCase() === "error"
+  ) {
+    return;
+  }
+
   if (logger) {
     logger(event);
     return;

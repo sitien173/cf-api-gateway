@@ -341,6 +341,7 @@ export const createGatewayResolver = () => {
 
   const startRefresh = (
     env: ResolverEnv,
+    ctx: GatewayExecutionContext,
     handlers: GatewayHandlers,
     dependencies: ResolveGatewayDependencies,
     cold: boolean,
@@ -361,7 +362,16 @@ export const createGatewayResolver = () => {
         adopt(result.candidate);
         logAdoption(dependencies, result.candidate);
         if (result.candidate.source === "inline-refresh") {
-          await writeLkg(env, result.candidate.raw, result.candidate.fetchTime);
+          const writePromise = writeLkg(
+            env,
+            result.candidate.raw,
+            result.candidate.fetchTime,
+          );
+          if (cold) {
+            ctx.waitUntil(writePromise);
+          } else {
+            await writePromise;
+          }
         }
         nextRefreshMs =
           getNow(dependencies) + REFRESH_INTERVAL_MS + getJitter(dependencies);
@@ -387,6 +397,12 @@ export const createGatewayResolver = () => {
     handlers: GatewayHandlers,
     dependencies: ResolveGatewayDependencies = {},
   ): Promise<CompiledGateway | undefined> => {
+    const configuredLogEvent = dependencies.logEvent;
+    dependencies = {
+      ...dependencies,
+      logEvent: (event) =>
+        emitGatewayLog(configuredLogEvent, event, env),
+    };
     const now = getNow(dependencies);
     if (nextRefreshMs !== 0 && now < nextRefreshMs) {
       return compiled;
@@ -402,7 +418,13 @@ export const createGatewayResolver = () => {
     }
 
     const hadCompiled = compiled !== undefined;
-    const refresh = startRefresh(env, handlers, dependencies, !hadCompiled);
+    const refresh = startRefresh(
+      env,
+      ctx,
+      handlers,
+      dependencies,
+      !hadCompiled,
+    );
     if (hadCompiled) {
       ctx.waitUntil(refresh);
       return compiled;

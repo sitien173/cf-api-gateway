@@ -233,7 +233,6 @@ test("executeGatewayRequest short-circuits when a request policy returns a respo
       ["request_received", "received", "GET", null, null, null],
       ["route_resolution", "matched", "GET", "/api/test", null, null],
       ["request_policy", "short_circuit", "GET", "/api/test", 401, "stop"],
-      ["analytics", "scheduled", "GET", "/api/test", 401, null],
       ["response_finalization", "completed", "GET", "/api/test", 401, null],
     ],
   );
@@ -718,7 +717,6 @@ test("executeGatewayRequest finalizes route misses as 404 responses", async () =
     [
       ["request_received", "received", null],
       ["route_resolution", "route_miss", 404],
-      ["analytics", "scheduled", 404],
       ["response_finalization", "completed", 404],
     ],
   );
@@ -762,7 +760,6 @@ test("configuration resolution failures finalize as 503 with analytics and logs"
       ["route_resolution", "matched", null],
       ["origin", "started", null],
       ["origin", "completed", 503],
-      ["analytics", "scheduled", 503],
       ["response_finalization", "completed", 503],
     ],
   );
@@ -770,7 +767,7 @@ test("configuration resolution failures finalize as 503 with analytics and logs"
 
 test("executeGatewayRequest finalizes unexpected failures as 500 responses", async () => {
   const analytics: number[] = [];
-  const logs: Array<{ stage: string; outcome: string; status?: number }> = [];
+  const logs: Array<{ stage: string; outcome: string; status?: number; reason?: string }> = [];
   const { ctx, flush } = createContext();
   const gateway = compileGateway(
     {
@@ -812,6 +809,7 @@ test("executeGatewayRequest finalizes unexpected failures as 500 responses", asy
           stage: event.stage,
           outcome: event.outcome,
           status: event.status,
+          reason: event.reason,
         });
       },
       logAnalytics: async (event) => {
@@ -824,6 +822,7 @@ test("executeGatewayRequest finalizes unexpected failures as 500 responses", asy
 
   assert.equal(response.status, 500);
   assert.equal(analytics[0], 500);
+  assert.equal(logs.find((log) => log.stage === "execution")?.reason, "boom");
   assert.deepEqual(
     logs.map((log) => [log.stage, log.outcome, log.status ?? null]),
     [
@@ -831,7 +830,6 @@ test("executeGatewayRequest finalizes unexpected failures as 500 responses", asy
       ["route_resolution", "matched", null],
       ["origin", "started", null],
       ["execution", "failed", 500],
-      ["analytics", "scheduled", 500],
       ["response_finalization", "completed", 500],
     ],
   );
