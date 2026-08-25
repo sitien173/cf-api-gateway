@@ -47,7 +47,13 @@ const findAllowedOrigin = (
     }
 
     const suffix = allowedOrigin.slice(2).toLowerCase();
-    if (requestHostname !== suffix && requestHostname.endsWith(`.${suffix}`)) {
+    const matchesDevelopmentOrigin =
+      (requestOrigin === "http://localhost" && suffix === "localhost") ||
+      (requestOrigin === "http://127.0.0.1" && suffix === "127.0.0.1");
+    const matchesWildcardHost =
+      requestHostname !== suffix && requestHostname.endsWith(`.${suffix}`);
+
+    if (matchesDevelopmentOrigin || matchesWildcardHost) {
       return requestOrigin;
     }
   }

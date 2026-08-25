@@ -50,8 +50,13 @@ test("cors response policy rejects insecure wildcard origins", () => {
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), null);
 });
 
-test("cors response policy preserves explicit localhost development origins", () => {
-  for (const origin of ["http://localhost", "http://127.0.0.1"]) {
+test("cors response policy preserves wildcard localhost development origins", () => {
+  const cases = [
+    { allowedOrigin: "*.localhost", origin: "http://localhost" },
+    { allowedOrigin: "*.127.0.0.1", origin: "http://127.0.0.1" },
+  ];
+
+  for (const { allowedOrigin, origin } of cases) {
     const response = new Response("ok");
     const request = new Request("https://cf-api-gateway.example.com/", {
       headers: { origin },
@@ -60,7 +65,7 @@ test("cors response policy preserves explicit localhost development origins", ()
     cors(
       response,
       {
-        allowedOrigins: [origin],
+        allowedOrigins: [allowedOrigin],
         allowedMethods: [],
         allowedHeaders: [],
         allowCredentials: true,
