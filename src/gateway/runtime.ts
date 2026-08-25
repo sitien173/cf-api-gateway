@@ -17,14 +17,11 @@ const matchesPrefix = (pathname: string, prefix: string): boolean => {
     return pathname.startsWith("/");
   }
 
-  const normalizedPrefix = prefix.endsWith("/")
-    ? prefix.slice(0, -1)
-    : prefix;
+  if (prefix.endsWith("/")) {
+    return pathname.startsWith(prefix);
+  }
 
-  return (
-    pathname === normalizedPrefix ||
-    pathname.startsWith(`${normalizedPrefix}/`)
-  );
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
 };
 
 const resolveRoute = (

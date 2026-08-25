@@ -426,6 +426,54 @@ test("executeGatewayRequest keeps prefix routes within path segment boundaries",
   assert.equal(response.status, 404);
 });
 
+test("executeGatewayRequest preserves trailing-slash wildcard prefixes", async () => {
+  const { ctx, flush } = createContext();
+  const gateway = compileGateway(
+    {
+      policies: [],
+      routes: [
+        {
+          path: "/api/*",
+          method: "GET",
+          origin: {
+            type: "proxyAll",
+            options: {},
+          },
+          policies: {
+            request: [],
+            response: [],
+          },
+        },
+      ],
+    },
+    {
+      requestPolicies: {},
+      responsePolicies: {},
+      origins: {
+        proxyAll: async () => new Response("matched"),
+      },
+    },
+  );
+
+  const bareResponse = await executeGatewayRequest(
+    gateway,
+    new Request("https://gateway.example.com/api"),
+    { ANALYTICS_ENABLED: "false", GATEWAY_NAME: "test-gateway" },
+    ctx,
+  );
+  const childResponse = await executeGatewayRequest(
+    gateway,
+    new Request("https://gateway.example.com/api/child"),
+    { ANALYTICS_ENABLED: "false", GATEWAY_NAME: "test-gateway" },
+    ctx,
+  );
+
+  await flush();
+
+  assert.equal(bareResponse.status, 404);
+  assert.equal(childResponse.status, 200);
+});
+
 test("executeGatewayRequest resolves exact routes before broader prefixes", async () => {
   const prefixRoute = {
     path: "/api/*",
