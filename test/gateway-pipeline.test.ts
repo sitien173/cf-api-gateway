@@ -84,6 +84,57 @@ test("compileGateway resolves handlers and rejects unknown policy references", (
   );
 });
 
+test("compileGateway normalizes route methods and rejects unknown methods", () => {
+  const handlers = {
+    requestPolicies: {},
+    responsePolicies: {},
+    origins: {
+      url: async () => new Response("ok"),
+    },
+  };
+  const route = {
+    path: "/health",
+    method: "get",
+    origin: {
+      type: "url",
+      options: { url: "https://origin.example.com" },
+    },
+    policies: {
+      request: [],
+      response: [],
+    },
+  };
+
+  const gateway = compileGateway({ policies: [], routes: [route] }, handlers);
+  assert.equal(gateway.routes[0].method, "GET");
+
+  assert.throws(
+    () => compileGateway({ policies: [], routes: [{ ...route, method: "INVALID" }] }, handlers),
+    /Unknown HTTP method INVALID/,
+  );
+});
+
+test("compileGateway rejects duplicate policy names", () => {
+  assert.throws(
+    () =>
+      compileGateway(
+        {
+          policies: [
+            { name: "duplicate", type: "first" },
+            { name: "duplicate", type: "second" },
+          ],
+          routes: [],
+        },
+        {
+          requestPolicies: {},
+          responsePolicies: {},
+          origins: {},
+        },
+      ),
+    /Duplicate policy name duplicate/,
+  );
+});
+
 test("executeGatewayRequest short-circuits when a request policy returns a response", async () => {
   let originCalls = 0;
   const analytics: Array<{ path: string; status: number; latency: number }> = [];
@@ -334,6 +385,100 @@ test("executeGatewayRequest matches wildcard url routes as prefixes", async () =
   );
 });
 
+test("executeGatewayRequest keeps prefix routes within path segment boundaries", async () => {
+  const { ctx, flush } = createContext();
+  const gateway = compileGateway(
+    {
+      policies: [],
+      routes: [
+        {
+          path: "/api",
+          method: "GET",
+          origin: {
+            type: "proxyAll",
+            options: {},
+          },
+          policies: {
+            request: [],
+            response: [],
+          },
+        },
+      ],
+    },
+    {
+      requestPolicies: {},
+      responsePolicies: {},
+      origins: {
+        proxyAll: async () => new Response("matched"),
+      },
+    },
+  );
+
+  const response = await executeGatewayRequest(
+    gateway,
+    new Request("https://gateway.example.com/apiary/secret"),
+    { ANALYTICS_ENABLED: "false", GATEWAY_NAME: "test-gateway" },
+    ctx,
+  );
+
+  await flush();
+
+  assert.equal(response.status, 404);
+});
+
+test("executeGatewayRequest resolves exact routes before broader prefixes", async () => {
+  const prefixRoute = {
+    path: "/api/*",
+    method: "GET",
+    origin: {
+      type: "proxyAll",
+      options: {},
+    },
+    policies: {
+      request: [],
+      response: [],
+    },
+  };
+  const exactRoute = {
+    path: "/api/orders",
+    method: "GET",
+    origin: {
+      type: "url",
+      options: { url: "https://origin.example.com" },
+    },
+    policies: {
+      request: [],
+      response: [],
+    },
+  };
+  const handlers = {
+    requestPolicies: {},
+    responsePolicies: {},
+    origins: {
+      proxyAll: async () => new Response("prefix"),
+      url: async () => new Response("exact"),
+    },
+  };
+
+  for (const routes of [
+    [prefixRoute, exactRoute],
+    [exactRoute, prefixRoute],
+  ]) {
+    const { ctx, flush } = createContext();
+    const gateway = compileGateway({ policies: [], routes }, handlers);
+    const response = await executeGatewayRequest(
+      gateway,
+      new Request("https://gateway.example.com/api/orders"),
+      { ANALYTICS_ENABLED: "false", GATEWAY_NAME: "test-gateway" },
+      ctx,
+    );
+
+    await flush();
+
+    assert.equal(await response.text(), "exact");
+  }
+});
+
 test("executeGatewayRequest handles CORS preflight without hitting origin", async () => {
   const { ctx, flush } = createContext();
   const logs: Array<{ stage: string; outcome: string; routePath?: string; status?: number }> = [];
@@ -437,6 +582,48 @@ test("executeGatewayRequest handles CORS preflight without hitting origin", asyn
       ["response_finalization", "completed", "/udemy/v2/api/", 204]
     ],
   );
+});
+
+test("executeGatewayRequest routes explicit OPTIONS requests to their origin", async () => {
+  const { ctx, flush } = createContext();
+  const gateway = compileGateway(
+    {
+      policies: [],
+      routes: [
+        {
+          path: "/options",
+          method: "OPTIONS",
+          origin: {
+            type: "url",
+            options: { url: "https://origin.example.com" },
+          },
+          policies: {
+            request: [],
+            response: [],
+          },
+        },
+      ],
+    },
+    {
+      requestPolicies: {},
+      responsePolicies: {},
+      origins: {
+        url: async () => new Response("options-origin"),
+      },
+    },
+  );
+
+  const response = await executeGatewayRequest(
+    gateway,
+    new Request("https://gateway.example.com/options", { method: "OPTIONS" }),
+    { ANALYTICS_ENABLED: "false", GATEWAY_NAME: "test-gateway" },
+    ctx,
+  );
+
+  await flush();
+
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "options-origin");
 });
 
 test("executeGatewayRequest finalizes route misses as 404 responses", async () => {

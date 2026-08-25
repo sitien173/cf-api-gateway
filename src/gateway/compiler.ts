@@ -10,6 +10,17 @@ import type {
 } from "./types";
 
 const hasWildcardSuffix = (path: string): boolean => path.endsWith("/*");
+const knownMethods = new Set([
+  "GET",
+  "HEAD",
+  "POST",
+  "PUT",
+  "DELETE",
+  "CONNECT",
+  "OPTIONS",
+  "TRACE",
+  "PATCH",
+]);
 const publicMethods = new Set(["GET", "HEAD", "OPTIONS"]);
 
 const resolveMatchMode = (originType: string, path: string): RouteMatchMode =>
@@ -28,6 +39,10 @@ const buildPolicyDefinitions = (
 ): Map<string, GatewayPolicyConfig> => {
   const policyMap = new Map<string, GatewayPolicyConfig>();
   for (const policy of policies) {
+    if (policyMap.has(policy.name)) {
+      throw new Error(`Duplicate policy name ${policy.name}`);
+    }
+
     policyMap.set(policy.name, policy);
   }
 
@@ -57,6 +72,7 @@ const resolvePolicies = <TPolicy extends { name: string; options?: any; handler:
     } as TPolicy;
   });
 
+// Compilation is all-or-nothing: failures throw before a gateway is returned.
 export const compileGateway = (
   config: GatewayConfig,
   handlers: GatewayHandlers,
@@ -84,6 +100,11 @@ export const compileGateway = (
       throw new Error(`Origin ${route.origin.type} not found`);
     }
 
+    const method = route.method.toUpperCase();
+    if (!knownMethods.has(method)) {
+      throw new Error(`Unknown HTTP method ${route.method}`);
+    }
+
     const matchMode = resolveMatchMode(route.origin.type, route.path);
 
     const requestPolicies = resolvePolicies<CompiledRequestPolicy>(
@@ -91,18 +112,18 @@ export const compileGateway = (
       policyDefinitions,
       handlers.requestPolicies,
     );
-    const requiresAuth = !publicMethods.has(route.method.toUpperCase());
+    const requiresAuth = !publicMethods.has(method);
     const hasGatewayAuthPolicy = route.policies.request.some(
       (name) => policyDefinitions.get(name)?.type === "apiKeyOrAuth0",
     );
 
     if (requiresAuth && !hasGatewayAuthPolicy) {
-      throw new Error(`Route ${route.method} ${route.path} must use an apiKeyOrAuth0 policy`);
+      throw new Error(`Route ${method} ${route.path} must use an apiKeyOrAuth0 policy`);
     }
 
     return {
       path: normalizeRoutePath(route.path, matchMode),
-      method: route.method,
+      method,
       originType: route.origin.type,
       matchMode,
       origin: {
@@ -116,6 +137,30 @@ export const compileGateway = (
         handlers.responsePolicies,
       ),
     };
+  }).sort((left, right) => {
+    const matchModeOrder =
+      (left.matchMode === "exact" ? 0 : 1) -
+      (right.matchMode === "exact" ? 0 : 1);
+    if (matchModeOrder !== 0) {
+      return matchModeOrder;
+    }
+
+    const pathLengthOrder = right.path.length - left.path.length;
+    if (pathLengthOrder !== 0) {
+      return pathLengthOrder;
+    }
+
+    const pathOrder = left.path.localeCompare(right.path);
+    if (pathOrder !== 0) {
+      return pathOrder;
+    }
+
+    const methodOrder = left.method.localeCompare(right.method);
+    if (methodOrder !== 0) {
+      return methodOrder;
+    }
+
+    return left.originType.localeCompare(right.originType);
   });
 
   return { routes };

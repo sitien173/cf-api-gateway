@@ -12,6 +12,21 @@ import type {
 const defaultNow = () => Date.now();
 const analyticsRouteMissLabel = "route_miss";
 
+const matchesPrefix = (pathname: string, prefix: string): boolean => {
+  if (prefix === "/") {
+    return pathname.startsWith("/");
+  }
+
+  const normalizedPrefix = prefix.endsWith("/")
+    ? prefix.slice(0, -1)
+    : prefix;
+
+  return (
+    pathname === normalizedPrefix ||
+    pathname.startsWith(`${normalizedPrefix}/`)
+  );
+};
+
 const resolveRoute = (
   gateway: CompiledGateway,
   request: Request,
@@ -25,7 +40,7 @@ const resolveRoute = (
     }
 
     if (route.matchMode === "prefix") {
-      return requestUrl.pathname.startsWith(route.path);
+      return matchesPrefix(requestUrl.pathname, route.path);
     }
 
     return route.path === requestUrl.pathname;
@@ -128,6 +143,7 @@ export const executeGatewayRequest = async (
 ): Promise<Response> => {
   const latencyStart = (dependencies.now ?? defaultNow)();
   let route: CompiledRoute | undefined;
+  let isPreflight = false;
 
   try {
     emitGatewayLog(dependencies.logEvent, {
@@ -137,9 +153,9 @@ export const executeGatewayRequest = async (
       ...createLogContext(originalRequest),
     });
 
-    route =
-      resolvePreflightRoute(gateway, originalRequest) ??
-      resolveRoute(gateway, originalRequest);
+    const preflightRoute = resolvePreflightRoute(gateway, originalRequest);
+    isPreflight = preflightRoute !== undefined;
+    route = preflightRoute ?? resolveRoute(gateway, originalRequest);
 
     if (!route) {
       emitGatewayLog(dependencies.logEvent, {
@@ -168,7 +184,7 @@ export const executeGatewayRequest = async (
       ...createLogContext(originalRequest, route),
     });
 
-    if (originalRequest.method === "OPTIONS") {
+    if (isPreflight) {
       const preflightResponse = await applyResponsePolicies(
         route,
         new Response(null, { status: 204 }),
