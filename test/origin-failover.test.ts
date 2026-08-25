@@ -15,6 +15,85 @@ const mutationScenarios = [
   },
 ];
 
+test("failover handlers dedupe concurrent health checks through one shared cache", async () => {
+  const originalFetch = globalThis.fetch;
+  const primaryUrl = "https://shared-health-primary.example.com";
+  const fallbackUrl = "https://shared-health-fallback.example.com";
+  let healthChecks = 0;
+  let resolveHealth!: (response: Response) => void;
+  const healthResponse = new Promise<Response>((resolve) => {
+    resolveHealth = resolve;
+  });
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const request = input instanceof Request ? input : new Request(input);
+    if (request.url === `${primaryUrl}/api/health`) {
+      healthChecks += 1;
+      return healthResponse;
+    }
+    if (request.url === `${primaryUrl}/one` || request.url === `${primaryUrl}/two`) {
+      return new Response("primary", { status: 200 });
+    }
+    throw new Error(`unexpected request: ${request.url}`);
+  }) as typeof fetch;
+
+  try {
+    const first = proxyAll(
+      new Request("https://gateway.example.com/one"),
+      { primaryUrl, fallbackUrl },
+    );
+    const second = upstreamWithFallback(
+      new Request("https://gateway.example.com/two"),
+      { primaryUrl, fallbackUrl },
+    );
+
+    await Promise.resolve();
+    assert.equal(healthChecks, 1);
+    resolveHealth(new Response("ok", { status: 200 }));
+
+    const responses = await Promise.all([first, second]);
+    assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("non-retryable failover requests stream bodies with half duplex", async () => {
+  const originalFetch = globalThis.fetch;
+  const primaryUrl = "https://stream-primary.example.com/orders";
+  let upstreamRequest: Request | undefined;
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    upstreamRequest = input instanceof Request ? input : new Request(input);
+    return new Response("ok", { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const request = new Request("https://gateway.example.com/orders", {
+      method: "POST",
+      body: "streamed body",
+    });
+    (request as Request & { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer =
+      async () => {
+        throw new Error("request body must not be buffered");
+      };
+
+    const response = await executeFailover({
+      request,
+      primaryUrl,
+      fallbackUrl: "https://stream-fallback.example.com/orders",
+      primaryHealthy: true,
+      wrapResponse: (result) => result,
+    });
+
+    assert.equal(response.status, 200);
+    assert.ok(upstreamRequest?.body);
+    assert.equal((upstreamRequest as Request & { duplex?: string }).duplex, "half");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("a rejected primary body cancellation does not prevent one GET fallback", async () => {
   const originalFetch = globalThis.fetch;
   const primaryUrl = "https://cancel-primary.example.com/orders";

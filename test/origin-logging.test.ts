@@ -171,6 +171,49 @@ test("url origin logs structured request failure details", async () => {
   }
 });
 
+test("url origin aborts timed out requests without following redirects", async () => {
+  const originalFetch = globalThis.fetch;
+  let redirect: RequestRedirect | undefined;
+  let signal: AbortSignal | undefined;
+
+  globalThis.fetch = (async (
+    _input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => {
+    redirect = init?.redirect;
+    signal = init?.signal;
+
+    if (!signal) {
+      return new Response(null, { status: 302 });
+    }
+
+    return new Promise<Response>((_resolve, reject) => {
+      const testTimeout = setTimeout(() => reject(new Error("test timeout")), 25);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(testTimeout);
+          reject(new Error("aborted"));
+        },
+        { once: true },
+      );
+    });
+  }) as typeof fetch;
+
+  try {
+    const response = await url(
+      new Request("https://gateway.example.com/orders"),
+      { url: "https://origin.example.com/orders", timeout: 5 } as any,
+    );
+
+    assert.equal(response.status, 500);
+    assert.equal(redirect, "manual");
+    assert.equal(signal?.aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("url origin preserves the incoming query string for fixed upstream paths", async () => {
   const originalFetch = globalThis.fetch;
   let capturedUrl = "";

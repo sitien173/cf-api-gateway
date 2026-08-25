@@ -5,6 +5,7 @@ import { IRequest, TOriginHandler } from "../types";
 type UrlOptions = {
   url: string;
   pathRewrite?: string;
+  timeout?: number;
 };
 
 const joinPath = (basePath: string, suffix: string): string => {
@@ -41,6 +42,9 @@ export const url: TOriginHandler = async (
   options: UrlOptions
 ) => {
   const originRequest = new Request(buildOriginUrl(request, options), new Request(request));
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeout ?? 5000);
+
   try {
     emitGatewayLog(undefined, {
       level: "info",
@@ -49,7 +53,14 @@ export const url: TOriginHandler = async (
       ...createOriginLogContext(request, "url"),
     });
 
-    const originFetch = await fetch(originRequest.url, originRequest);
+    const originFetch = await fetch(originRequest.url, {
+      method: originRequest.method,
+      headers: originRequest.headers,
+      body: originRequest.body,
+      ...(originRequest.body ? { duplex: "half" as const } : {}),
+      signal: controller.signal,
+      redirect: "manual",
+    });
 
     emitGatewayLog(undefined, {
       level: "info",
@@ -68,5 +79,7 @@ export const url: TOriginHandler = async (
       ...createOriginLogContext(request, "url"),
     });
     return new ErrorResponse("Origin request failed", 500);
+  } finally {
+    clearTimeout(timeoutId);
   }
 };
