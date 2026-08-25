@@ -65,6 +65,8 @@ const resolvePolicies = <TPolicy extends { name: string; options?: any; handler:
       throw new Error(`Policy type ${definition.type} not found`);
     }
 
+    (handler as any).compile?.(definition.options);
+
     return {
       name: definition.name,
       options: definition.options,

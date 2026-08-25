@@ -3,6 +3,9 @@ import { IRequest, TRequestPolicyHandler } from "../../types";
 import { ErrorResponse } from "../../helpers/response";
 
 const validatorCache = new WeakMap<object, Validator>();
+type JsonBodyValidationHandler = TRequestPolicyHandler & {
+  compile?: (options: { schema: object }) => void;
+};
 
 const getValidator = (schema: object): Validator => {
   const cached = validatorCache.get(schema);
@@ -15,7 +18,7 @@ const getValidator = (schema: object): Validator => {
   return validator;
 };
 
-export const jsonBodyValidation: TRequestPolicyHandler = async (
+const jsonBodyValidationHandler: JsonBodyValidationHandler = async (
   request: IRequest,
   options: { schema: object }
 ) => {
@@ -43,3 +46,9 @@ export const jsonBodyValidation: TRequestPolicyHandler = async (
     return new ErrorResponse("Could not validate body against schema", 400);
   }
 };
+
+jsonBodyValidationHandler.compile = (options) => {
+  getValidator(options.schema);
+};
+
+export const jsonBodyValidation: TRequestPolicyHandler = jsonBodyValidationHandler;

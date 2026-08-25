@@ -4,6 +4,42 @@ import assert from "node:assert/strict";
 import { changeMethod } from "../src/policies/request/change-method.ts";
 import { jsonBodyValidation } from "../src/policies/request/json-body-validation.ts";
 import { basicAuth } from "../src/policies/request/basic-auth.ts";
+import { compileGateway } from "../src/gateway/compiler.ts";
+
+test("compileGateway builds JSON validators during policy compilation", () => {
+  assert.throws(() =>
+    compileGateway(
+      {
+        policies: [
+          {
+            name: "validate",
+            type: "jsonBodyValidation",
+            options: { schema: null as any },
+          },
+        ],
+        routes: [
+          {
+            path: "/validate",
+            method: "OPTIONS",
+            origin: {
+              type: "url",
+              options: { url: "https://origin.example.com" },
+            },
+            policies: {
+              request: ["validate"],
+              response: [],
+            },
+          },
+        ],
+      },
+      {
+        requestPolicies: { jsonBodyValidation },
+        responsePolicies: {},
+        origins: { url: async () => new Response("ok") },
+      },
+    ),
+  );
+});
 
 test("JSON schema mismatches return HTTP 400", async () => {
   const response = await jsonBodyValidation(
