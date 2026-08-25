@@ -27,3 +27,47 @@ test("cors response policy echoes the request origin for matching wildcard hosts
     "https://udemy-v2.hcmc.online",
   );
 });
+
+test("cors response policy rejects insecure wildcard origins", () => {
+  const response = new Response("ok");
+  const request = new Request("https://cf-api-gateway.example.com/udemy/v2/api/admin/verify", {
+    headers: {
+      origin: "http://evil.udemy.com",
+    },
+  });
+
+  cors(
+    response,
+    {
+      allowedOrigins: ["*.udemy.com"],
+      allowedMethods: ["GET"],
+      allowedHeaders: [],
+      allowCredentials: true,
+    },
+    request,
+  );
+
+  assert.equal(response.headers.get("Access-Control-Allow-Origin"), null);
+});
+
+test("cors response policy preserves explicit localhost development origins", () => {
+  for (const origin of ["http://localhost", "http://127.0.0.1"]) {
+    const response = new Response("ok");
+    const request = new Request("https://cf-api-gateway.example.com/", {
+      headers: { origin },
+    });
+
+    cors(
+      response,
+      {
+        allowedOrigins: [origin],
+        allowedMethods: [],
+        allowedHeaders: [],
+        allowCredentials: true,
+      },
+      request,
+    );
+
+    assert.equal(response.headers.get("Access-Control-Allow-Origin"), origin);
+  }
+});

@@ -65,6 +65,19 @@ export const compileGateway = (
     config.policies,
   );
 
+  for (const policy of config.policies) {
+    if (
+      policy.type === "cors" &&
+      policy.options?.allowCredentials === true &&
+      Array.isArray(policy.options.allowedOrigins) &&
+      policy.options.allowedOrigins.includes("*")
+    ) {
+      throw new Error(
+        `CORS policy ${policy.name} cannot combine wildcard allowed origins with credentials`,
+      );
+    }
+  }
+
   const routes: CompiledRoute[] = config.routes.map((route) => {
     const originHandler = handlers.origins[route.origin.type];
     if (!originHandler) {

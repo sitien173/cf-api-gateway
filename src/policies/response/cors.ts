@@ -34,9 +34,15 @@ const findAllowedOrigin = (
   }
 
   const requestHostname = requestUrl.hostname.toLowerCase();
+  const isDevelopmentOrigin =
+    requestOrigin === "http://localhost" || requestOrigin === "http://127.0.0.1";
 
   for (const allowedOrigin of allowedOrigins) {
     if (!allowedOrigin.startsWith("*.")) {
+      continue;
+    }
+
+    if (requestUrl.protocol !== "https:" && !isDevelopmentOrigin) {
       continue;
     }
 
@@ -63,14 +69,14 @@ export const cors: TResponsePolicyHandler = (
     allowCredentials,
   } = options;
 
+  if (allowedOrigins.length !== 1 || allowedOrigins[0] !== "*") {
+    response.headers.append("Vary", "Origin");
+  }
+
   const allowedOrigin = findAllowedOrigin(request, allowedOrigins);
 
   if (allowedOrigin) {
     response.headers.set("Access-Control-Allow-Origin", allowedOrigin);
-
-    if (allowedOrigin !== "*") {
-      response.headers.append("Vary", "Origin");
-    }
   }
 
   if (allowedMethods.length > 0) {
@@ -81,10 +87,12 @@ export const cors: TResponsePolicyHandler = (
   }
 
   if (allowedHeaders.length > 0) {
-    response.headers.set(
-      "Access-Control-Allow-Headers",
-      allowedHeaders.join(", ")
-    );
+    const allowHeaders =
+      allowCredentials && allowedHeaders.length === 1 && allowedHeaders[0] === "*"
+        ? request?.headers.get("access-control-request-headers") ?? "*"
+        : allowedHeaders.join(", ");
+
+    response.headers.set("Access-Control-Allow-Headers", allowHeaders);
   }
 
   if (exposedHeaders.length > 0) {
