@@ -146,7 +146,7 @@ export const executeGatewayRequest = async (
   };
   const requestUrl = new URL(originalRequest.url);
   let route: CompiledRoute | undefined;
-  let isPreflight = false;
+  let isPreflight: boolean;
 
   try {
     emitGatewayLog(dependencies.logEvent, {

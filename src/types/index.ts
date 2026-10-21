@@ -13,34 +13,37 @@ export interface Auth0Bindings {
 }
 
 export type RequestPolicyEnv = Auth0Bindings & {
-  [key: string]: any;
+  [key: string]: unknown;
 };
 
-export type TRequestPolicyHandler = (
-  request: IRequest,
-  options: any,
-  env: RequestPolicyEnv,
-) => Promise<IRequest | Response>;
+export type TRequestPolicyHandler<TOptions = unknown> = {
+  handle(
+    request: IRequest,
+    options: TOptions,
+    env: RequestPolicyEnv,
+  ): Promise<IRequest | Response>;
+}["handle"];
 
-export type TResponsePolicyHandler = (
-  response: Response,
-  options: any,
-  request?: IRequest
-) => void | Response | Promise<void | Response>;
+export type TResponsePolicyHandler<TOptions = unknown> = {
+  handle(
+    response: Response,
+    options: TOptions,
+    request?: IRequest,
+  ): void | Response | Promise<void | Response>;
+}["handle"];
 
 export type TPolicyName = string;
 
 export type TRequestPolicy = {
   handler: TRequestPolicyHandler;
-  options: any;
+  options: unknown;
 };
 
 export type TResponsePolicy = {
   handler: TResponsePolicyHandler;
-  options: any;
+  options: unknown;
 };
 
-export type TOriginHandler = (
-  request: IRequest,
-  options: any
-) => Promise<Response>;
+export type TOriginHandler<TOptions = unknown> = {
+  handle(request: IRequest, options: TOptions): Promise<Response>;
+}["handle"];

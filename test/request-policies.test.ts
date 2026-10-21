@@ -20,7 +20,7 @@ test("compileGateway builds JSON validators during policy compilation", () => {
         policies: {
           validate: {
             type: "jsonBodyValidation",
-            options: { schema: null as any },
+            options: { schema: null as unknown as object },
           },
         },
         routes: [

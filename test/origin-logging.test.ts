@@ -37,10 +37,10 @@ test("emitGatewayLog suppresses info below the configured level", () => {
   const events: Array<{ level: string }> = [];
   const logger = (event: { level: string }) => events.push(event);
 
-  emitGatewayLog(logger, { level: "info" } as any, { GATEWAY_LOG_LEVEL: "error" });
-  emitGatewayLog(logger, { level: "error" } as any, { GATEWAY_LOG_LEVEL: "error" });
+  emitGatewayLog(logger, { level: "info", stage: "test", outcome: "test" }, { GATEWAY_LOG_LEVEL: "error" });
+  emitGatewayLog(logger, { level: "error", stage: "test", outcome: "test" }, { GATEWAY_LOG_LEVEL: "error" });
 
-  assert.deepEqual(events, [{ level: "error" }]);
+  assert.deepEqual(events, [{ level: "error", stage: "test", outcome: "test" }]);
 });
 
 test("proxyAll logs primary failure and fallback completion with structured context", async () => {
@@ -214,7 +214,7 @@ test("url origin aborts timed out requests without following redirects", async (
   try {
     const response = await url(
       new Request("https://gateway.example.com/orders"),
-      { url: "https://origin.example.com/orders", timeout: 5 } as any,
+      { url: "https://origin.example.com/orders", timeout: 5 },
     );
 
     assert.equal(response.status, 500);
@@ -249,7 +249,7 @@ test("url origin preserves the incoming query string for fixed upstream paths", 
         {
           url: "https://origin.example.com/cookies",
           pathRewrite: "/udemy/v2",
-        } as any,
+        },
       );
 
       assert.equal(response.status, 200);
@@ -290,7 +290,7 @@ test("url origin applies pathRewrite when forwarding to a root upstream URL", as
       {
         url: "https://origin.example.com",
         pathRewrite: "/udemy/v2",
-      } as any,
+      },
     );
 
     assert.equal(response.status, 200);

@@ -3,7 +3,6 @@ import * as responsePolicies from "./policies/response";
 import * as gatewayOrigins from "./origins";
 import config from "./config.json";
 import { createGatewayResolver } from "./config/source";
-import { ErrorResponse } from "./helpers/response";
 import { executeGatewayRequest } from "./gateway";
 import { emitGatewayLog } from "./gateway/logging";
 import type {
@@ -21,7 +20,7 @@ export interface Env {
   GATEWAY_CONFIG: KVNamespace;
   ANALYTICS_ENABLED?: string;
   API_ANALYTICS?: AnalyticsEngineDataset;
-  [key: string]: any; // for analytics env
+  [key: string]: unknown; // for analytics env
 }
 
 const gatewayHandlers = {
@@ -62,8 +61,9 @@ export const executeUnavailableRequest = (
   originalRequest: IRequest,
   env: Env,
   ctx: ExecutionContext,
-  dependencies: ExecutionDependencies = { logAnalytics },
+  dependencies?: ExecutionDependencies,
 ): Promise<Response> => {
+  const resolvedDependencies = dependencies ?? { logAnalytics };
   const executionRequest =
     originalRequest.method === "OPTIONS"
       ? (new Request(originalRequest.url, {
@@ -73,15 +73,15 @@ export const executeUnavailableRequest = (
       : originalRequest;
   const logEvent = (event: Parameters<NonNullable<ExecutionDependencies["logEvent"]>>[0]) => {
     const mappedEvent = { ...event, method: originalRequest.method };
-    if (dependencies.logEvent) {
-      dependencies.logEvent(mappedEvent);
+    if (resolvedDependencies.logEvent) {
+      resolvedDependencies.logEvent(mappedEvent);
     } else {
       emitGatewayLog(undefined, mappedEvent);
     }
   };
-  const logAnalyticsDependency = dependencies.logAnalytics
+  const logAnalyticsDependency = resolvedDependencies.logAnalytics
     ? (event: Parameters<NonNullable<ExecutionDependencies["logAnalytics"]>>[0], analyticsEnv: Parameters<NonNullable<ExecutionDependencies["logAnalytics"]>>[1]) =>
-        dependencies.logAnalytics!({ ...event, method: originalRequest.method }, analyticsEnv)
+        resolvedDependencies.logAnalytics!({ ...event, method: originalRequest.method }, analyticsEnv)
     : undefined;
 
   return executeGatewayRequest(
@@ -90,7 +90,7 @@ export const executeUnavailableRequest = (
     env,
     ctx,
     {
-      ...dependencies,
+      ...resolvedDependencies,
       logEvent,
       logAnalytics: logAnalyticsDependency,
     },

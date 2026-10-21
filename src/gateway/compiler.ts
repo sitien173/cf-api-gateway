@@ -1,4 +1,8 @@
 import type {
+  TRequestPolicyHandler,
+  TResponsePolicyHandler,
+} from "../types";
+import type {
   CompiledGateway,
   CompiledRequestPolicy,
   CompiledResponsePolicy,
@@ -36,11 +40,15 @@ const normalizeRoutePath = (
 };
 
 const resolvePolicies = <
-  TPolicy extends { name: string; options?: any; handler: any },
+  TPolicy extends {
+    name: string;
+    options?: unknown;
+    handler: TRequestPolicyHandler | TResponsePolicyHandler;
+  },
 >(
   names: string[],
   policyDefinitions: Record<string, PolicyConfig>,
-  resolver: Record<string, any>,
+  resolver: Record<string, TRequestPolicyHandler | TResponsePolicyHandler>,
   routeLabel: string,
 ): TPolicy[] =>
   names.map((name) => {
@@ -56,7 +64,10 @@ const resolvePolicies = <
       );
     }
 
-    (handler as any).compile?.(definition.options);
+    const compilableHandler = handler as
+      | (TRequestPolicyHandler & { compile?: (options: unknown) => void })
+      | (TResponsePolicyHandler & { compile?: (options: unknown) => void });
+    compilableHandler.compile?.(definition.options);
 
     return {
       name,

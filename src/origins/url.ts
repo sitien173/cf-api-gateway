@@ -37,7 +37,7 @@ const buildOriginUrl = (request: IRequest, options: UrlOptions): string => {
   return originUrl.toString();
 };
 
-export const url: TOriginHandler = async (
+export const url: TOriginHandler<UrlOptions> = async (
   request: IRequest,
   options: UrlOptions
 ) => {
@@ -56,7 +56,7 @@ export const url: TOriginHandler = async (
     });
 
     return new Response(originFetch.body, originFetch);
-  } catch (err) {
+  } catch {
     emitGatewayLog(undefined, {
       level: "error",
       stage: "origin",

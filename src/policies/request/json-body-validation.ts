@@ -4,7 +4,7 @@ import { ErrorResponse } from "../../helpers/response";
 import { emitGatewayLog } from "../../gateway/logging";
 
 const validatorCache = new WeakMap<object, Validator>();
-type JsonBodyValidationHandler = TRequestPolicyHandler & {
+type JsonBodyValidationHandler = TRequestPolicyHandler<{ schema: object }> & {
   compile?: (options: { schema: object }) => void;
 };
 
@@ -28,7 +28,7 @@ const jsonBodyValidationHandler: JsonBodyValidationHandler = async (
 
   try {
     body = await clonedRequest.json();
-  } catch (e) {
+  } catch {
     return new ErrorResponse("Request body is not valid JSON", 400);
   }
 
@@ -55,4 +55,4 @@ jsonBodyValidationHandler.compile = (options) => {
   getValidator(options.schema);
 };
 
-export const jsonBodyValidation: TRequestPolicyHandler = jsonBodyValidationHandler;
+export const jsonBodyValidation: TRequestPolicyHandler<{ schema: object }> = jsonBodyValidationHandler;

@@ -141,6 +141,27 @@ test("apiKeyOrAuth0 returns 401 for missing and invalid bearer tokens", async ()
   assert.equal(invalid.status, 401);
 });
 
+test("apiKeyOrAuth0 normalizes issuers with several trailing slashes", async () => {
+  const normalizedIssuer = "https://multi-slash-tenant.example.com/";
+  const fixture = await createTokenFixture(normalizedIssuer);
+
+  await withMockedJwks(fixture.jwks, async (resolverCalls) => {
+    const response = await apiKeyOrAuth0(
+      new Request("https://gateway.example.com/orders", {
+        headers: { authorization: `Bearer ${fixture.token}` },
+      }),
+      {},
+      {
+        AUTH0_ISSUER: "https://multi-slash-tenant.example.com////",
+        AUTH0_AUDIENCE: audience,
+      },
+    );
+
+    assert.equal(response instanceof Request, true);
+    assert.equal(resolverCalls(), 1);
+  });
+});
+
 test("apiKeyOrAuth0 caches JWK resolvers by normalized JWKS URL", async () => {
   const cacheIssuer = "https://cache-tenant.example.com/";
   const fixture = await createTokenFixture(cacheIssuer);

@@ -18,7 +18,7 @@ test("cors response policy tolerates omitted optional fields", () => {
       allowedMethods: ["GET", "POST"],
       allowedHeaders: ["*"],
       allowCredentials: true,
-    } as any, request),
+    }, request),
   );
 
   assert.equal(

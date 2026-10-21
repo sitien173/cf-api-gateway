@@ -7,7 +7,7 @@ type basicAuthtOptions = {
   password: string;
 };
 
-export const basicAuth: TRequestPolicyHandler = async (
+export const basicAuth: TRequestPolicyHandler<basicAuthtOptions> = async (
   request: IRequest,
   options: basicAuthtOptions
 ) => {

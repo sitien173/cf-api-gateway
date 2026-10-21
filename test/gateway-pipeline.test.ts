@@ -520,7 +520,7 @@ test("executeGatewayRequest handles CORS preflight without hitting origin", asyn
     {
       requestPolicies: {},
       responsePolicies: {
-        cors: (response: Response, options: any) => {
+        cors: (response: Response, options: { allowedOrigins: string[]; allowedMethods: string[] }) => {
           if (options.allowedOrigins.length > 0) {
             response.headers.set("Access-Control-Allow-Origin", options.allowedOrigins.join(", "));
           }
@@ -682,7 +682,11 @@ test("unavailable gateway responses include permissive CORS headers", async () =
   const { ctx, flush } = createContext();
   const response = await executeUnavailableRequest(
     new Request("https://gateway.example.com/unavailable"),
-    { ANALYTICS_ENABLED: "false", GATEWAY_NAME: "test-gateway" } as any,
+    {
+      ANALYTICS_ENABLED: "false",
+      GATEWAY_NAME: "test-gateway",
+      GATEWAY_CONFIG: {} as KVNamespace,
+    },
     ctx,
   );
 

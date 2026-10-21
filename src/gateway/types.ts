@@ -10,18 +10,19 @@ export type GatewayEnv = {
   GATEWAY_NAME?: string;
   ANALYTICS_ENABLED?: string;
   API_ANALYTICS?: AnalyticsEngineDataset;
-  [key: string]: any;
+  GATEWAY_LOG_LEVEL?: string;
+  [key: string]: unknown;
 };
 
 export type OriginConfig = {
   type: string;
-  options?: any;
+  options?: Record<string, unknown>;
   description?: string;
 };
 
 export type PolicyConfig = {
   type: string;
-  options?: any;
+  options?: Record<string, unknown>;
   description?: string;
 };
 
@@ -48,13 +49,13 @@ export type GatewayHandlers = {
 
 export type CompiledRequestPolicy = {
   name: string;
-  options?: any;
+  options?: unknown;
   handler: TRequestPolicyHandler;
 };
 
 export type CompiledResponsePolicy = {
   name: string;
-  options?: any;
+  options?: unknown;
   handler: TResponsePolicyHandler;
 };
 
@@ -67,7 +68,7 @@ export type CompiledRoute = {
   matchMode: RouteMatchMode;
   origin: {
     handler: TOriginHandler;
-    options?: any;
+    options?: unknown;
   };
   requestPolicies: CompiledRequestPolicy[];
   responsePolicies: CompiledResponsePolicy[];

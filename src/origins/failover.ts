@@ -137,7 +137,7 @@ export const checkUpstreamHealth = async (
   }
 };
 
-type FailoverOriginOptions = {
+export type FailoverOriginOptions = {
   primaryUrl: string;
   fallbackUrl: string;
   stripPrefix?: string;

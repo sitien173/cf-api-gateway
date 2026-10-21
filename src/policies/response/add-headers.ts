@@ -4,7 +4,7 @@ type AddHeadersOptions = {
   headers: Record<string, string>;
 };
 
-export const addHeaders: TResponsePolicyHandler = (
+export const addHeaders: TResponsePolicyHandler<AddHeadersOptions> = (
   response: Response,
   options: AddHeadersOptions
 ) => {

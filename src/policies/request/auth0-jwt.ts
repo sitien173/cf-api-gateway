@@ -50,7 +50,12 @@ const normalizeIssuer = (value: string): NormalizedIssuer | undefined => {
       return undefined;
     }
 
-    issuerUrl.pathname = `${issuerUrl.pathname.replace(/\/+$/, "")}/`;
+    while (issuerUrl.pathname.length > 1 && issuerUrl.pathname.endsWith("/")) {
+      issuerUrl.pathname = issuerUrl.pathname.slice(0, -1);
+    }
+    if (!issuerUrl.pathname.endsWith("/")) {
+      issuerUrl.pathname += "/";
+    }
     issuerUrl.search = "";
     issuerUrl.hash = "";
 

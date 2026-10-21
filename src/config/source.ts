@@ -62,7 +62,9 @@ const getNow = (dependencies: ResolveGatewayDependencies): number =>
   dependencies.now ? dependencies.now() : Date.now();
 
 const getJitter = (dependencies: ResolveGatewayDependencies): number => {
-  const random = dependencies.random ? dependencies.random() : Math.random();
+  const random = dependencies.random
+    ? dependencies.random()
+    : crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32;
   const bounded = Number.isFinite(random) ? Math.min(Math.max(random, 0), 1) : 0;
   return Math.floor(bounded * REFRESH_JITTER_MS);
 };
@@ -346,9 +348,7 @@ export const createGatewayResolver = () => {
     dependencies: ResolveGatewayDependencies,
     cold: boolean,
   ): Promise<boolean> => {
-    let refreshPromise!: Promise<boolean>;
-
-    refreshPromise = (async () => {
+    const refreshPromise = (async () => {
       try {
         const result = cold
           ? await resolveCold(env, handlers, dependencies)
@@ -381,9 +381,7 @@ export const createGatewayResolver = () => {
         nextRefreshMs = getNow(dependencies) + FAILURE_BACKOFF_MS;
         return false;
       } finally {
-        if (refreshInFlight === refreshPromise) {
-          refreshInFlight = undefined;
-        }
+        refreshInFlight = undefined;
       }
     })();
 

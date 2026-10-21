@@ -61,7 +61,7 @@ const findAllowedOrigin = (
   return null;
 };
 
-export const cors: TResponsePolicyHandler = (
+export const cors: TResponsePolicyHandler<CorsOptions> = (
   response: Response,
   options: CorsOptions,
   request?: Request,
