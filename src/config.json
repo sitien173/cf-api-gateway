@@ -1,63 +1,33 @@
 {
   "origins": {
-    "udemy-cookies": {
+    "udemy-v3": {
       "type": "url",
       "options": {
-        "url": "https://cookies-updater-udemy-hkdfbxdrcub5b3d0.southeastasia-01.azurewebsites.net/cookies",
-        "pathRewrite": "/udemy"
+        "url": "https://udemy.tienngodev.io.vn",
+        "pathRewrite": "/udemy/v3"
       }
     },
-    "udemy-writer": {
+    "sonarqube": {
       "type": "url",
       "options": {
-        "url": "https://cookies-updater-udemy-hkdfbxdrcub5b3d0.southeastasia-01.azurewebsites.net",
-        "pathRewrite": "/udemy"
+        "url": "https://sonarquebe.tienngodev.io.vn",
+        "pathRewrite": "/",
+        "timeout": 30000
       }
     },
-    "udemy-reader": {
+    "vaultwarden": {
       "type": "url",
       "options": {
-        "url": "https://udemy-api.hcmc.online",
-        "pathRewrite": "/udemy"
-      }
-    },
-    "udemy-v2-health": {
-      "type": "url",
-      "options": {
-        "url": "https://cookies-updater-udemy-v2-fad5f6hqephqfsan.southeastasia-01.azurewebsites.net/api/health",
-        "pathRewrite": "/udemy/v2"
-      }
-    },
-    "udemy-v2-cookies": {
-      "type": "url",
-      "options": {
-        "url": "https://cookies-updater-udemy-v2-fad5f6hqephqfsan.southeastasia-01.azurewebsites.net/cookies",
-        "pathRewrite": "/udemy/v2"
-      }
-    },
-    "udemy-v2-reader": {
-      "type": "url",
-      "options": {
-        "url": "https://udemy-api-v2.hcmc.online",
-        "pathRewrite": "/udemy/v2"
-      }
-    },
-    "udemy-v2-writer": {
-      "type": "url",
-      "options": {
-        "url": "https://cookies-updater-udemy-v2-fad5f6hqephqfsan.southeastasia-01.azurewebsites.net",
-        "pathRewrite": "/udemy/v2"
-      }
-    },
-    "config-vault": {
-      "type": "url",
-      "options": {
-        "url": "https://config-vault.hcmc.online",
-        "pathRewrite": "/config-vault"
+        "url": "https://vault.tienngodev.io.vn",
+        "pathRewrite": "/",
+        "timeout": 30000
       }
     }
   },
   "policies": {
+    "require-auth": {
+      "type": "apiKeyOrAuth0"
+    },
     "udemy-cors": {
       "type": "cors",
       "options": {
@@ -77,26 +47,7 @@
         "allowCredentials": true
       }
     },
-    "hcmc-cors": {
-      "type": "cors",
-      "options": {
-        "allowedOrigins": [
-          "*.hcmc.online"
-        ],
-        "allowedMethods": [
-          "GET",
-          "POST",
-          "PUT",
-          "DELETE",
-          "OPTIONS"
-        ],
-        "allowedHeaders": [
-          "*"
-        ],
-        "allowCredentials": true
-      }
-    },
-    "config-vault-cors": {
+    "allow-all-cors": {
       "type": "cors",
       "options": {
         "allowedOrigins": [
@@ -107,155 +58,112 @@
           "POST",
           "PUT",
           "DELETE",
-          "OPTIONS"
+          "OPTIONS",
+          "HEAD",
+          "PATCH"
         ],
         "allowedHeaders": [
           "*"
         ],
         "allowCredentials": false
       }
-    },
-    "require-auth0": {
-      "type": "apiKeyOrAuth0"
     }
   },
   "routes": [
     {
-      "description": "GET cookies - upstream to event sourcing worker",
-      "path": "/udemy",
+      "description": "V3 root (relational API schema)",
+      "path": "/udemy/v3",
       "methods": [
         "GET"
       ],
-      "origin": "udemy-cookies",
-      "request": [],
+      "origin": "udemy-v3",
       "response": [
-        "udemy-cors",
-        "hcmc-cors"
+        "udemy-cors"
       ]
     },
     {
-      "description": "GET Udemy Base URL - upstream to event sourcing worker",
-      "path": "/udemy/api/public/udemy-base-url",
+      "description": "V3 API reads",
+      "path": "/udemy/v3/api/*",
       "methods": [
         "GET"
       ],
-      "origin": "udemy-writer",
-      "request": [],
+      "origin": "udemy-v3",
       "response": [
-        "udemy-cors",
-        "hcmc-cors"
+        "udemy-cors"
       ]
     },
     {
-      "description": "GET API endpoints - upstream to .NET read model",
-      "path": "/udemy/api/*",
-      "methods": [
-        "GET"
-      ],
-      "origin": "udemy-reader",
-      "request": [],
-      "response": [
-        "udemy-cors",
-        "hcmc-cors"
-      ]
-    },
-    {
-      "description": "Write API endpoints - upstream to event sourcing worker",
-      "path": "/udemy/api/*",
+      "description": "V3 API writes",
+      "path": "/udemy/v3/api/*",
       "methods": [
         "POST",
         "PUT",
         "DELETE"
       ],
-      "origin": "udemy-writer",
+      "origin": "udemy-v3",
       "request": [
-        "require-auth0"
+        "require-auth"
       ],
       "response": [
-        "udemy-cors",
-        "hcmc-cors"
+        "udemy-cors"
       ]
     },
     {
-      "description": "V2 health check - upstream to Azure Functions",
-      "path": "/udemy/v2/health",
+      "description": "SonarQube, auth handled by SonarQube",
+      "path": "/sonarqube",
       "methods": [
         "GET"
       ],
-      "origin": "udemy-v2-health",
-      "request": [],
+      "origin": "sonarqube",
+      "auth": "none",
       "response": [
-        "udemy-cors",
-        "hcmc-cors"
+        "allow-all-cors"
       ]
     },
     {
-      "description": "V2 GET cookies - upstream to Azure Functions",
-      "path": "/udemy/v2",
+      "path": "/sonarqube/*",
       "methods": [
-        "GET"
-      ],
-      "origin": "udemy-v2-cookies",
-      "request": [],
-      "response": [
-        "udemy-cors",
-        "hcmc-cors"
-      ]
-    },
-    {
-      "description": "V2 GET API endpoints - upstream to .NET read-only backend",
-      "path": "/udemy/v2/api/*",
-      "methods": [
-        "GET"
-      ],
-      "origin": "udemy-v2-reader",
-      "request": [],
-      "response": [
-        "udemy-cors",
-        "hcmc-cors"
-      ]
-    },
-    {
-      "description": "V2 write API endpoints - upstream to Azure Functions (event producer)",
-      "path": "/udemy/v2/api/*",
-      "methods": [
+        "GET",
         "POST",
         "PUT",
-        "DELETE"
+        "DELETE",
+        "OPTIONS",
+        "HEAD",
+        "PATCH"
       ],
-      "origin": "udemy-v2-writer",
-      "request": [
-        "require-auth0"
-      ],
+      "origin": "sonarqube",
+      "auth": "none",
       "response": [
-        "udemy-cors",
-        "hcmc-cors"
+        "allow-all-cors"
       ]
     },
     {
-      "path": "/config-vault/*",
+      "description": "Vaultwarden, auth handled by Vaultwarden",
+      "path": "/vault",
       "methods": [
         "GET"
       ],
-      "origin": "config-vault",
-      "request": [],
+      "origin": "vaultwarden",
+      "auth": "none",
       "response": [
-        "config-vault-cors"
+        "allow-all-cors"
       ]
     },
     {
-      "path": "/config-vault/*",
+      "path": "/vault/*",
       "methods": [
+        "GET",
         "POST",
         "PUT",
-        "DELETE"
+        "DELETE",
+        "OPTIONS",
+        "HEAD",
+        "PATCH"
       ],
-      "origin": "config-vault",
-      "request": [
-        "require-auth0"
-      ],
+      "origin": "vaultwarden",
+      "auth": "none",
       "response": [
-        "config-vault-cors"
+        "allow-all-cors"
       ]
     }
   ]
