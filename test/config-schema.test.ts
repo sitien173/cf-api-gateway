@@ -30,10 +30,7 @@ test("rejects a route whose request policies are not an array", () => {
     routes: [
       {
         ...config.routes[0],
-        policies: {
-          ...config.routes[0].policies,
-          request: "require-auth0",
-        },
+        request: "require-auth0",
       },
     ],
   };
@@ -45,16 +42,32 @@ test("rejects a route whose request policies are not an array", () => {
   }
 });
 
+test("rejects v1 shape and unknown keys at every object level", () => {
+  assert.equal(validateGatewayConfig({ routes: [], policies: [] }).valid, false);
+  const cases = [
+    { ...config, extra: true },
+    { ...config, origins: { ...config.origins, "udemy-cookies": { ...config.origins["udemy-cookies"], extra: true } } },
+    { ...config, policies: { ...config.policies, "udemy-cors": { ...config.policies["udemy-cors"], extra: true } } },
+    { ...config, routes: [{ ...config.routes[0], extra: true }] },
+    { ...config, origins: { ...config.origins, "udemy-cookies": { ...config.origins["udemy-cookies"], options: { ...config.origins["udemy-cookies"].options, extra: true } } } },
+  ];
+  for (const value of cases) assert.equal(validateGatewayConfig(value).valid, false);
+});
+
+test("rejects invalid methods and malformed type-specific options", () => {
+  const baseRoute = config.routes[0];
+  for (const methods of [[], ["GET", "GET"], ["CONNECT"]]) {
+    assert.equal(validateGatewayConfig({ ...config, routes: [{ ...baseRoute, methods }] }).valid, false);
+  }
+  assert.equal(validateGatewayConfig({ ...config, policies: { cors: { type: "cors", options: { allowedMethods: [], allowedHeaders: [], allowCredentials: false } } } }).valid, false);
+  assert.equal(validateGatewayConfig({ ...config, origins: { broken: { type: "url", options: {} } } }).valid, false);
+});
+
 test("rejects a route missing origin.type", () => {
-  const { type: _type, ...originWithoutType } = config.routes[0].origin;
+  const { type: _type, ...originWithoutType } = config.origins["udemy-cookies"];
   const value = {
     ...config,
-    routes: [
-      {
-        ...config.routes[0],
-        origin: originWithoutType,
-      },
-    ],
+    origins: { ...config.origins, "udemy-cookies": originWithoutType },
   };
   const result = validateGatewayConfig(value);
 

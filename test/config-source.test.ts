@@ -7,27 +7,15 @@ import {
 } from "../src/config/source.ts";
 
 const validRaw = JSON.stringify({
-  routes: [
-    {
-      path: "/public",
-      method: "GET",
-      origin: { type: "url" },
-      policies: { request: [], response: [] },
-    },
-  ],
-  policies: [],
+  origins: { public: { type: "url", options: { url: "https://origin.test" } } },
+  policies: {},
+  routes: [{ path: "/public", methods: ["GET"], origin: "public" }],
 });
 
 const refreshedRaw = JSON.stringify({
-  routes: [
-    {
-      path: "/refreshed",
-      method: "GET",
-      origin: { type: "url" },
-      policies: { request: [], response: [] },
-    },
-  ],
-  policies: [],
+  origins: { public: { type: "url", options: { url: "https://origin.test" } } },
+  policies: {},
+  routes: [{ path: "/refreshed", methods: ["GET"], origin: "public" }],
 });
 
 const handlers = {

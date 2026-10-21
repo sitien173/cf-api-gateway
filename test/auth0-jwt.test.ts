@@ -172,12 +172,13 @@ test("request policies receive the Worker environment", async () => {
   let receivedEnv: unknown;
   const gateway = compileGateway(
     {
-      policies: [{ name: "capture", type: "capture" }],
+      origins: { origin: { type: "url", options: {} } },
+      policies: { capture: { type: "capture" } },
       routes: [{
         path: "/public",
-        method: "GET",
-        origin: { type: "url", options: {} },
-        policies: { request: ["capture"], response: [] },
+        methods: ["GET"],
+        origin: "origin",
+        request: ["capture"],
       }],
     },
     {
@@ -205,11 +206,12 @@ test("request policies receive the Worker environment", async () => {
 });
 
 test("unsafe routes require a policy configured with type apiKeyOrAuth0", () => {
+  const origins = { origin: { type: "url", options: {} } };
   const route = (method: string, request: string[] = []) => ({
     path: "/api/resource",
-    method,
-    origin: { type: "url", options: {} },
-    policies: { request, response: [] },
+    methods: [method],
+    origin: "origin",
+    request,
   });
   const handlers = {
     requestPolicies: { namedAuth: async (request: Request) => request },
@@ -220,7 +222,8 @@ test("unsafe routes require a policy configured with type apiKeyOrAuth0", () => 
   for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
     assert.throws(
       () => compileGateway({
-        policies: [{ name: "named-auth", type: "namedAuth" }],
+        origins,
+        policies: { "named-auth": { type: "namedAuth" } },
         routes: [route(method, ["named-auth"])],
       }, handlers),
       /apiKeyOrAuth0/,
@@ -228,25 +231,27 @@ test("unsafe routes require a policy configured with type apiKeyOrAuth0", () => 
   }
 
   assert.doesNotThrow(() => compileGateway({
-    policies: [{ name: "jwt-policy", type: "apiKeyOrAuth0" }],
+    origins,
+    policies: { "jwt-policy": { type: "apiKeyOrAuth0" } },
     routes: [route("POST", ["jwt-policy"])],
   }, {
     ...handlers,
     requestPolicies: { apiKeyOrAuth0: handlers.requestPolicies.namedAuth },
   }));
-  assert.doesNotThrow(() => compileGateway({ policies: [], routes: [route("GET"), route("OPTIONS")] }, handlers));
+  assert.doesNotThrow(() => compileGateway({ origins, policies: {}, routes: [route("GET"), route("OPTIONS")] }, handlers));
 });
 
 test("apiKeyOrAuth0 uses the production request-policy barrel", async () => {
   let originCalls = 0;
   const gateway = compileGateway(
     {
-      policies: [{ name: "require-api-key-or-auth0", type: "apiKeyOrAuth0" }],
+      origins: { origin: { type: "url", options: {} } },
+      policies: { "require-api-key-or-auth0": { type: "apiKeyOrAuth0" } },
       routes: [{
         path: "/api/resource",
-        method: "POST",
-        origin: { type: "url", options: {} },
-        policies: { request: ["require-api-key-or-auth0"], response: [] },
+        methods: ["POST"],
+        origin: "origin",
+        request: ["require-api-key-or-auth0"],
       }],
     },
     {
@@ -283,19 +288,19 @@ test("valid Auth0 tokens reach mutation origins while OPTIONS stays public", asy
   await withMockedJwks(fixture.jwks, async () => {
     const gateway = compileGateway(
       {
-        policies: [{ name: "require-auth", type: "apiKeyOrAuth0" }],
+        origins: { origin: { type: "url", options: {} } },
+        policies: { "require-auth": { type: "apiKeyOrAuth0" } },
         routes: [
           {
             path: "/api/resource",
-            method: "POST",
-            origin: { type: "url", options: {} },
-            policies: { request: ["require-auth"], response: [] },
+            methods: ["POST"],
+            origin: "origin",
+            request: ["require-auth"],
           },
           {
             path: "/api/resource",
-            method: "GET",
-            origin: { type: "url", options: {} },
-            policies: { request: [], response: [] },
+            methods: ["GET"],
+            origin: "origin",
           },
         ],
       },

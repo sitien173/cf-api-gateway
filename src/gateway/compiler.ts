@@ -5,28 +5,29 @@ import type {
   CompiledRoute,
   GatewayConfig,
   GatewayHandlers,
-  GatewayPolicyConfig,
+  PolicyConfig,
   RouteMatchMode,
 } from "./types";
 
 const hasWildcardSuffix = (path: string): boolean => path.endsWith("/*");
+const publicMethods = new Set(["GET", "HEAD", "OPTIONS"]);
 const knownMethods = new Set([
   "GET",
   "HEAD",
   "POST",
   "PUT",
-  "DELETE",
-  "CONNECT",
-  "OPTIONS",
-  "TRACE",
   "PATCH",
+  "DELETE",
+  "OPTIONS",
 ]);
-const publicMethods = new Set(["GET", "HEAD", "OPTIONS"]);
 
 const resolveMatchMode = (originType: string, path: string): RouteMatchMode =>
   originType === "proxyAll" || hasWildcardSuffix(path) ? "prefix" : "exact";
 
-const normalizeRoutePath = (path: string, matchMode: RouteMatchMode): string => {
+const normalizeRoutePath = (
+  path: string,
+  matchMode: RouteMatchMode,
+): string => {
   if (matchMode === "prefix" && hasWildcardSuffix(path)) {
     return path.slice(0, -1);
   }
@@ -34,41 +35,31 @@ const normalizeRoutePath = (path: string, matchMode: RouteMatchMode): string => 
   return path;
 };
 
-const buildPolicyDefinitions = (
-  policies: GatewayPolicyConfig[],
-): Map<string, GatewayPolicyConfig> => {
-  const policyMap = new Map<string, GatewayPolicyConfig>();
-  for (const policy of policies) {
-    if (policyMap.has(policy.name)) {
-      throw new Error(`Duplicate policy name ${policy.name}`);
-    }
-
-    policyMap.set(policy.name, policy);
-  }
-
-  return policyMap;
-};
-
-const resolvePolicies = <TPolicy extends { name: string; options?: any; handler: any }>(
+const resolvePolicies = <
+  TPolicy extends { name: string; options?: any; handler: any },
+>(
   names: string[],
-  policyDefinitions: Map<string, GatewayPolicyConfig>,
+  policyDefinitions: Record<string, PolicyConfig>,
   resolver: Record<string, any>,
+  routeLabel: string,
 ): TPolicy[] =>
   names.map((name) => {
-    const definition = policyDefinitions.get(name);
+    const definition = policyDefinitions[name];
     if (!definition) {
-      throw new Error(`Policy ${name} not found`);
+      throw new Error(`${routeLabel}Policy ${name} not found`);
     }
 
     const handler = resolver[definition.type];
     if (!handler) {
-      throw new Error(`Policy type ${definition.type} not found`);
+      throw new Error(
+        `${routeLabel}policy "${name}" type ${definition.type} not found in this phase`,
+      );
     }
 
     (handler as any).compile?.(definition.options);
 
     return {
-      name: definition.name,
+      name,
       options: definition.options,
       handler,
     } as TPolicy;
@@ -79,11 +70,7 @@ export const compileGateway = (
   config: GatewayConfig,
   handlers: GatewayHandlers,
 ): CompiledGateway => {
-  const policyDefinitions = buildPolicyDefinitions(
-    config.policies,
-  );
-
-  for (const policy of config.policies) {
+  for (const [name, policy] of Object.entries(config.policies)) {
     if (
       policy.type === "cors" &&
       policy.options?.allowCredentials === true &&
@@ -91,80 +78,102 @@ export const compileGateway = (
       policy.options.allowedOrigins.includes("*")
     ) {
       throw new Error(
-        `CORS policy ${policy.name} cannot combine wildcard allowed origins with credentials`,
+        `CORS policy ${name} cannot combine wildcard allowed origins with credentials`,
       );
     }
   }
 
-  const routes: CompiledRoute[] = config.routes.map((route) => {
-    const originHandler = handlers.origins[route.origin.type];
-    if (!originHandler) {
-      throw new Error(`Origin ${route.origin.type} not found`);
-    }
+  const routes: CompiledRoute[] = [];
+  const seenRoutes = new Set<string>();
 
-    const method = route.method.toUpperCase();
-    if (!knownMethods.has(method)) {
-      throw new Error(`Unknown HTTP method ${route.method}`);
-    }
+  for (const route of config.routes) {
+    for (const configuredMethod of route.methods) {
+      const method = configuredMethod.toUpperCase();
+      const routeLabel = `Route ${method} ${route.path}: `;
+      if (!knownMethods.has(method)) {
+        throw new Error(`${routeLabel}Unknown HTTP method ${method}`);
+      }
+      const origin = config.origins[route.origin];
+      if (!origin) {
+        throw new Error(`${routeLabel}origin "${route.origin}" not found`);
+      }
 
-    const matchMode = resolveMatchMode(route.origin.type, route.path);
+      const originHandler = handlers.origins[origin.type];
+      if (!originHandler) {
+        throw new Error(`${routeLabel}origin type ${origin.type} not found`);
+      }
 
-    const requestPolicies = resolvePolicies<CompiledRequestPolicy>(
-      route.policies.request,
-      policyDefinitions,
-      handlers.requestPolicies,
-    );
-    // GET, HEAD, and OPTIONS routes are auth-optional by design; all other methods require gateway auth.
-    const requiresAuth = !publicMethods.has(method);
-    const hasGatewayAuthPolicy = route.policies.request.some(
-      (name) => policyDefinitions.get(name)?.type === "apiKeyOrAuth0",
-    );
+      const routeKey = `${method}\0${route.path}`;
+      if (seenRoutes.has(routeKey)) {
+        throw new Error(`${routeLabel}duplicate path and method`);
+      }
+      seenRoutes.add(routeKey);
 
-    if (requiresAuth && !hasGatewayAuthPolicy) {
-      throw new Error(`Route ${method} ${route.path} must use an apiKeyOrAuth0 policy`);
-    }
-
-    return {
-      path: normalizeRoutePath(route.path, matchMode),
-      method,
-      originType: route.origin.type,
-      matchMode,
-      origin: {
-        handler: originHandler,
-        options: route.origin.options,
-      },
-      requestPolicies,
-      responsePolicies: resolvePolicies<CompiledResponsePolicy>(
-        route.policies.response,
-        policyDefinitions,
+      const requestNames = route.request ?? [];
+      const responseNames = route.response ?? [];
+      const requestPolicies = resolvePolicies<CompiledRequestPolicy>(
+        requestNames,
+        config.policies,
+        handlers.requestPolicies,
+        routeLabel,
+      );
+      const responsePolicies = resolvePolicies<CompiledResponsePolicy>(
+        responseNames,
+        config.policies,
         handlers.responsePolicies,
-      ),
-    };
-  }).sort((left, right) => {
-    const matchModeOrder =
-      (left.matchMode === "exact" ? 0 : 1) -
-      (right.matchMode === "exact" ? 0 : 1);
-    if (matchModeOrder !== 0) {
-      return matchModeOrder;
+        routeLabel,
+      );
+
+      // GET, HEAD, and OPTIONS routes are auth-optional by design; all other methods require gateway auth.
+      const requiresAuth = !publicMethods.has(method);
+      const hasGatewayAuthPolicy = requestNames.some(
+        (name) => config.policies[name]?.type === "apiKeyOrAuth0",
+      );
+      if (requiresAuth && !hasGatewayAuthPolicy) {
+        throw new Error(`${routeLabel}must use an apiKeyOrAuth0 policy`);
+      }
+
+      const matchMode = resolveMatchMode(origin.type, route.path);
+      routes.push({
+        path: normalizeRoutePath(route.path, matchMode),
+        method,
+        originType: origin.type,
+        matchMode,
+        origin: {
+          handler: originHandler,
+          options: origin.options,
+        },
+        requestPolicies,
+        responsePolicies,
+      });
     }
+  }
 
-    const pathLengthOrder = right.path.length - left.path.length;
-    if (pathLengthOrder !== 0) {
-      return pathLengthOrder;
-    }
+  return {
+    routes: routes.sort((left, right) => {
+      const matchModeOrder =
+        (left.matchMode === "exact" ? 0 : 1) -
+        (right.matchMode === "exact" ? 0 : 1);
+      if (matchModeOrder !== 0) {
+        return matchModeOrder;
+      }
 
-    const pathOrder = left.path.localeCompare(right.path);
-    if (pathOrder !== 0) {
-      return pathOrder;
-    }
+      const pathLengthOrder = right.path.length - left.path.length;
+      if (pathLengthOrder !== 0) {
+        return pathLengthOrder;
+      }
 
-    const methodOrder = left.method.localeCompare(right.method);
-    if (methodOrder !== 0) {
-      return methodOrder;
-    }
+      const pathOrder = left.path.localeCompare(right.path);
+      if (pathOrder !== 0) {
+        return pathOrder;
+      }
 
-    return left.originType.localeCompare(right.originType);
-  });
+      const methodOrder = left.method.localeCompare(right.method);
+      if (methodOrder !== 0) {
+        return methodOrder;
+      }
 
-  return { routes };
+      return left.originType.localeCompare(right.originType);
+    }),
+  };
 };

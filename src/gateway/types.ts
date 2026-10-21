@@ -13,28 +13,31 @@ export type GatewayEnv = {
   [key: string]: any;
 };
 
-export type GatewayPolicyConfig = {
-  name: string;
+export type OriginConfig = {
   type: string;
   options?: any;
+  description?: string;
 };
 
-export type GatewayRouteConfig = {
+export type PolicyConfig = {
+  type: string;
+  options?: any;
+  description?: string;
+};
+
+export type RouteConfig = {
   path: string;
-  method: string;
-  origin: {
-    type: string;
-    options?: any;
-  };
-  policies: {
-    request: string[];
-    response: string[];
-  };
+  methods: string[];
+  origin: string;
+  request?: string[];
+  response?: string[];
+  description?: string;
 };
 
 export type GatewayConfig = {
-  routes: GatewayRouteConfig[];
-  policies: GatewayPolicyConfig[];
+  origins: Record<string, OriginConfig>;
+  policies: Record<string, PolicyConfig>;
+  routes: RouteConfig[];
 };
 
 export type GatewayHandlers = {

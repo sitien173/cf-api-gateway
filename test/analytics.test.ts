@@ -23,15 +23,9 @@ const createDataset = () => {
 const createResponseGateway = () =>
   compileGateway(
     {
-      policies: [],
-      routes: [
-        {
-          path: "/api/orders",
-          method: "GET",
-          origin: { type: "url", options: {} },
-          policies: { request: [], response: [] },
-        },
-      ],
+      origins: { orders: { type: "url", options: { url: "https://origin.test" } } },
+      policies: {},
+      routes: [{ path: "/api/orders", methods: ["GET"], origin: "orders" }],
     },
     {
       requestPolicies: {},
@@ -109,7 +103,7 @@ test("each gateway response creates one datapoint and route misses use a fixed l
     { logAnalytics },
   );
   await executeGatewayRequest(
-    compileGateway({ policies: [], routes: [] }, {
+    compileGateway({ origins: {}, policies: {}, routes: [] }, {
       requestPolicies: {},
       responsePolicies: {},
       origins: {},

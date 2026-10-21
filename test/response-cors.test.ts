@@ -43,9 +43,14 @@ test("compileGateway rejects credentialed wildcard CORS policies", () => {
     () =>
       compileGateway(
         {
-          policies: [
-            {
-              name: "unsafe-cors",
+          origins: {
+            origin: {
+              type: "url",
+              options: { url: "https://origin.example.com" },
+            },
+          },
+          policies: {
+            "unsafe-cors": {
               type: "cors",
               options: {
                 allowedOrigins: ["*"],
@@ -54,19 +59,14 @@ test("compileGateway rejects credentialed wildcard CORS policies", () => {
                 allowCredentials: true,
               },
             },
-          ],
+          },
           routes: [
             {
               path: "/health",
-              method: "GET",
-              origin: {
-                type: "url",
-                options: { url: "https://origin.example.com" },
-              },
-              policies: {
-                request: [],
-                response: ["unsafe-cors"],
-              },
+              methods: ["GET"],
+              origin: "origin",
+              request: [],
+              response: ["unsafe-cors"],
             },
           ],
         },

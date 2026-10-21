@@ -35,25 +35,22 @@ test("compileGateway resolves handlers and rejects unknown policy references", (
   };
 
   const validConfig = {
-    policies: [
-      {
-        name: "auth-policy",
+    origins: {
+      url: { type: "url", options: { url: "https://example.com" } },
+    },
+    policies: {
+      "auth-policy": {
         type: "auth",
         options: { role: "user" },
       },
-    ],
+    },
     routes: [
       {
         path: "/api/test",
-        method: "GET",
-        origin: {
-          type: "url",
-          options: { url: "https://example.com" },
-        },
-        policies: {
-          request: ["auth-policy"],
-          response: [],
-        },
+        methods: ["GET"],
+        origin: "url",
+        request: ["auth-policy"],
+        response: [],
       },
     ],
   };
@@ -71,10 +68,7 @@ test("compileGateway resolves handlers and rejects unknown policy references", (
           routes: [
             {
               ...validConfig.routes[0],
-              policies: {
-                request: ["missing-policy"],
-                response: [],
-              },
+              request: ["missing-policy"],
             },
           ],
         },
@@ -94,44 +88,23 @@ test("compileGateway normalizes route methods and rejects unknown methods", () =
   };
   const route = {
     path: "/health",
-    method: "get",
-    origin: {
-      type: "url",
-      options: { url: "https://origin.example.com" },
-    },
-    policies: {
-      request: [],
-      response: [],
-    },
+    methods: ["get"],
+    origin: "health",
+    request: [],
+    response: [],
+  };
+  const config = {
+    origins: { health: { type: "url", options: { url: "https://origin.example.com" } } },
+    policies: {},
+    routes: [route],
   };
 
-  const gateway = compileGateway({ policies: [], routes: [route] }, handlers);
+  const gateway = compileGateway(config, handlers);
   assert.equal(gateway.routes[0].method, "GET");
 
   assert.throws(
-    () => compileGateway({ policies: [], routes: [{ ...route, method: "INVALID" }] }, handlers),
+    () => compileGateway({ ...config, routes: [{ ...route, methods: ["INVALID"] }] }, handlers),
     /Unknown HTTP method INVALID/,
-  );
-});
-
-test("compileGateway rejects duplicate policy names", () => {
-  assert.throws(
-    () =>
-      compileGateway(
-        {
-          policies: [
-            { name: "duplicate", type: "first" },
-            { name: "duplicate", type: "second" },
-          ],
-          routes: [],
-        },
-        {
-          requestPolicies: {},
-          responsePolicies: {},
-          origins: {},
-        },
-      ),
-    /Duplicate policy name duplicate/,
   );
 });
 
@@ -143,25 +116,22 @@ test("executeGatewayRequest short-circuits when a request policy returns a respo
 
   const gateway = compileGateway(
     {
-      policies: [
-        {
-          name: "stop",
+      origins: {
+        url: { type: "url", options: { url: "https://example.com" } },
+      },
+      policies: {
+        stop: {
           type: "stop",
           options: { status: 401 },
         },
-      ],
+      },
       routes: [
         {
           path: "/api/test",
-          method: "GET",
-          origin: {
-            type: "url",
-            options: { url: "https://example.com" },
-          },
-          policies: {
-            request: ["stop"],
-            response: [],
-          },
+          methods: ["GET"],
+          origin: "url",
+          request: ["stop"],
+          response: [],
         },
       ],
     },
@@ -243,29 +213,25 @@ test("executeGatewayRequest invokes origin and response policies for a matched r
   const logs: Array<{ stage: string; outcome: string; status?: number; policyName?: string }> = [];
   const gateway = compileGateway(
     {
-      policies: [
-        {
-          name: "pass-through",
+      origins: {
+        "proxy-all": { type: "proxyAll", options: {} },
+      },
+      policies: {
+        "pass-through": {
           type: "passThrough",
         },
-        {
-          name: "tag",
+        tag: {
           type: "tag",
           options: { header: "x-gateway", value: "edge" },
         },
-      ],
+      },
       routes: [
         {
           path: "/proxy/",
-          method: "GET",
-          origin: {
-            type: "proxyAll",
-            options: {},
-          },
-          policies: {
-            request: ["pass-through"],
-            response: ["tag"],
-          },
+          methods: ["GET"],
+          origin: "proxy-all",
+          request: ["pass-through"],
+          response: ["tag"],
         },
       ],
     },
@@ -326,19 +292,17 @@ test("executeGatewayRequest matches wildcard url routes as prefixes", async () =
 
   const gateway = compileGateway(
     {
-      policies: [],
+      origins: {
+        url: { type: "url", options: { url: "https://origin.example.com" } },
+      },
+      policies: {},
       routes: [
         {
           path: "/udemy/v2/api/*",
-          method: "GET",
-          origin: {
-            type: "url",
-            options: { url: "https://origin.example.com" },
-          },
-          policies: {
-            request: [],
-            response: [],
-          },
+          methods: ["GET"],
+          origin: "url",
+          request: [],
+          response: [],
         },
       ],
     },
@@ -388,19 +352,17 @@ test("executeGatewayRequest keeps prefix routes within path segment boundaries",
   const { ctx, flush } = createContext();
   const gateway = compileGateway(
     {
-      policies: [],
+      origins: {
+        "proxy-all": { type: "proxyAll", options: {} },
+      },
+      policies: {},
       routes: [
         {
           path: "/api",
-          method: "GET",
-          origin: {
-            type: "proxyAll",
-            options: {},
-          },
-          policies: {
-            request: [],
-            response: [],
-          },
+          methods: ["GET"],
+          origin: "proxy-all",
+          request: [],
+          response: [],
         },
       ],
     },
@@ -429,19 +391,17 @@ test("executeGatewayRequest preserves trailing-slash wildcard prefixes", async (
   const { ctx, flush } = createContext();
   const gateway = compileGateway(
     {
-      policies: [],
+      origins: {
+        "proxy-all": { type: "proxyAll", options: {} },
+      },
+      policies: {},
       routes: [
         {
           path: "/api/*",
-          method: "GET",
-          origin: {
-            type: "proxyAll",
-            options: {},
-          },
-          policies: {
-            request: [],
-            response: [],
-          },
+          methods: ["GET"],
+          origin: "proxy-all",
+          request: [],
+          response: [],
         },
       ],
     },
@@ -476,27 +436,17 @@ test("executeGatewayRequest preserves trailing-slash wildcard prefixes", async (
 test("executeGatewayRequest resolves exact routes before broader prefixes", async () => {
   const prefixRoute = {
     path: "/api/*",
-    method: "GET",
-    origin: {
-      type: "proxyAll",
-      options: {},
-    },
-    policies: {
-      request: [],
-      response: [],
-    },
+    methods: ["GET"],
+    origin: "proxy-all",
+    request: [],
+    response: [],
   };
   const exactRoute = {
     path: "/api/orders",
-    method: "GET",
-    origin: {
-      type: "url",
-      options: { url: "https://origin.example.com" },
-    },
-    policies: {
-      request: [],
-      response: [],
-    },
+    methods: ["GET"],
+    origin: "url",
+    request: [],
+    response: [],
   };
   const handlers = {
     requestPolicies: {},
@@ -512,7 +462,17 @@ test("executeGatewayRequest resolves exact routes before broader prefixes", asyn
     [exactRoute, prefixRoute],
   ]) {
     const { ctx, flush } = createContext();
-    const gateway = compileGateway({ policies: [], routes }, handlers);
+    const gateway = compileGateway(
+      {
+        origins: {
+          "proxy-all": { type: "proxyAll", options: {} },
+          url: { type: "url", options: { url: "https://origin.example.com" } },
+        },
+        policies: {},
+        routes,
+      },
+      handlers,
+    );
     const response = await executeGatewayRequest(
       gateway,
       new Request("https://gateway.example.com/api/orders"),
@@ -533,9 +493,11 @@ test("executeGatewayRequest handles CORS preflight without hitting origin", asyn
 
   const gateway = compileGateway(
     {
-      policies: [
-        {
-          name: "cors-policy",
+      origins: {
+        url: { type: "url", options: { url: "https://origin.example.com" } },
+      },
+      policies: {
+        "cors-policy": {
           type: "cors",
           options: {
             allowedOrigins: ["http://localhost:3000"],
@@ -544,19 +506,14 @@ test("executeGatewayRequest handles CORS preflight without hitting origin", asyn
             allowCredentials: true,
           },
         },
-      ],
+      },
       routes: [
         {
           path: "/udemy/v2/api/*",
-          method: "GET",
-          origin: {
-            type: "url",
-            options: { url: "https://origin.example.com" },
-          },
-          policies: {
-            request: [],
-            response: ["cors-policy"],
-          },
+          methods: ["GET"],
+          origin: "url",
+          request: [],
+          response: ["cors-policy"],
         },
       ],
     },
@@ -635,19 +592,17 @@ test("executeGatewayRequest routes explicit OPTIONS requests to their origin", a
   const { ctx, flush } = createContext();
   const gateway = compileGateway(
     {
-      policies: [],
+      origins: {
+        url: { type: "url", options: { url: "https://origin.example.com" } },
+      },
+      policies: {},
       routes: [
         {
           path: "/options",
-          method: "OPTIONS",
-          origin: {
-            type: "url",
-            options: { url: "https://origin.example.com" },
-          },
-          policies: {
-            request: [],
-            response: [],
-          },
+          methods: ["OPTIONS"],
+          origin: "url",
+          request: [],
+          response: [],
         },
       ],
     },
@@ -679,7 +634,8 @@ test("executeGatewayRequest finalizes route misses as 404 responses", async () =
   const { ctx, flush } = createContext();
   const gateway = compileGateway(
     {
-      policies: [],
+      origins: {},
+      policies: {},
       routes: [],
     },
     {
@@ -790,19 +746,17 @@ test("executeGatewayRequest finalizes unexpected failures as 500 responses", asy
   const { ctx, flush } = createContext();
   const gateway = compileGateway(
     {
-      policies: [],
+      origins: {
+        url: { type: "url", options: {} },
+      },
+      policies: {},
       routes: [
         {
           path: "/api/fail",
-          method: "GET",
-          origin: {
-            type: "url",
-            options: {},
-          },
-          policies: {
-            request: [],
-            response: [],
-          },
+          methods: ["GET"],
+          origin: "url",
+          request: [],
+          response: [],
         },
       ],
     },

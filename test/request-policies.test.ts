@@ -11,25 +11,25 @@ test("compileGateway builds JSON validators during policy compilation", () => {
   assert.throws(() =>
     compileGateway(
       {
-        policies: [
-          {
-            name: "validate",
+        origins: {
+          origin: {
+            type: "url",
+            options: { url: "https://origin.example.com" },
+          },
+        },
+        policies: {
+          validate: {
             type: "jsonBodyValidation",
             options: { schema: null as any },
           },
-        ],
+        },
         routes: [
           {
             path: "/validate",
-            method: "OPTIONS",
-            origin: {
-              type: "url",
-              options: { url: "https://origin.example.com" },
-            },
-            policies: {
-              request: ["validate"],
-              response: [],
-            },
+            methods: ["OPTIONS"],
+            origin: "origin",
+            request: ["validate"],
+            response: [],
           },
         ],
       },

@@ -35,20 +35,20 @@ Edit `src/config.json` with your URLs:
 
 ```json
 {
-  "routes": [
-    {
-      "path": "/udemy/",
-      "method": "GET",
-      "origin": {
-        "type": "proxyAll",
-        "options": {
-          "primaryUrl": "https://api-udemy.hcmc.online",
-          "fallbackUrl": "https://udemy-worker.workers.dev",
-          "stripPrefix": "/udemy",
-          "healthCheckPath": "/api/health"
-        }
+  "origins": {
+    "udemy": {
+      "type": "proxyAll",
+      "options": {
+        "primaryUrl": "https://api-udemy.hcmc.online",
+        "fallbackUrl": "https://udemy-worker.workers.dev",
+        "stripPrefix": "/udemy",
+        "healthCheckPath": "/api/health"
       }
     }
+  },
+  "policies": {},
+  "routes": [
+    { "path": "/udemy/", "methods": ["GET"], "origin": "udemy" }
   ]
 }
 ```
@@ -108,43 +108,19 @@ Support multiple projects with path prefixes:
 
 ```json
 {
+  "origins": {
+    "udemy": { "type": "proxyAll", "options": { "primaryUrl": "https://api-udemy.hcmc.online", "fallbackUrl": "https://udemy-worker.workers.dev", "stripPrefix": "/udemy", "healthCheckPath": "/api/health", "healthCheckTimeout": 5000, "healthCheckCacheTtl": 60000 } },
+    "project2": { "type": "proxyAll", "options": { "primaryUrl": "https://api-project2.example.com", "fallbackUrl": "https://project2-worker.workers.dev", "stripPrefix": "/project2" } }
+  },
+  "policies": {},
   "routes": [
-    {
-      "path": "/udemy/",
-      "method": "GET",
-      "origin": {
-        "type": "proxyAll",
-        "options": {
-          "primaryUrl": "https://api-udemy.hcmc.online",
-          "fallback Url": "https://udemy-worker.workers.dev",
-          "stripPrefix": "/udemy",
-          "healthCheckPath": "/api/health",
-          "healthCheckTimeout": 5000,
-          "healthCheckCacheTtl": 60000
-        }
-      },
-      "policies": {
-        "request": [],
-        "response": []
-      }
-    },
-    {
-      "path": "/project2/",
-      "method": "GET",
-      "origin": {
-        "type": "proxyAll",
-        "options": {
-          "primaryUrl": "https://api-project2.example.com",
-          "fallbackUrl": "https://project2-worker.workers.dev",
-          "stripPrefix": "/project2"
-        }
-      }
-    }
+    { "path": "/udemy/", "methods": ["GET", "POST", "PUT", "DELETE"], "origin": "udemy", "request": [], "response": [] },
+    { "path": "/project2/", "methods": ["GET"], "origin": "project2" }
   ]
 }
 ```
 
-**Note**: Add routes for each HTTP method (GET, POST, PUT, DELETE) per project.
+Routes accept a `methods` array, so one route can cover multiple HTTP methods.
 
 ### Configuration Options
 
@@ -173,15 +149,17 @@ Add request/response policies for auth, CORS, etc.:
 
 ```json
 {
-  "policies": [
-    {
-      "name": "cors",
+  "policies": {
+    "cors": {
       "type": "cors",
       "options": {
-        "allowedOrigins": ["*"]
+        "allowedOrigins": ["*"],
+        "allowedMethods": ["GET"],
+        "allowedHeaders": ["*"],
+        "allowCredentials": false
       }
     }
-  ]
+  }
 }
 ```
 
@@ -190,10 +168,10 @@ Apply to routes:
 ```json
 {
   "path": "/api/data",
-  "policies": {
-    "request": ["auth-check"],
-    "response": ["cors"]
-  }
+  "methods": ["GET"],
+  "origin": "api",
+  "request": ["auth-check"],
+  "response": ["cors"]
 }
 ```
 
@@ -377,24 +355,29 @@ Add rate limiting policy:
 
 ```json
 {
-  "name": "rate-limit",
-  "type": "rateLimit",
-  "options": {
-    "requestsPerMinute": 100
+  "policies": {
+    "rate-limit": {
+      "type": "rateLimit",
+      "options": {
+        "requestsPerMinute": 100
+      }
+    }
   }
 }
 ```
 
 ### Authentication Policies
 
-Mutation routes must use the `auth0jwt` policy type. Auth0 values are read only
+Mutation routes must use the `apiKeyOrAuth0` policy type. Auth0 values are read only
 from Worker secrets, not route configuration:
 
 ```json
 {
-  "name": "require-auth0",
-  "type": "auth0jwt",
-  "options": {}
+  "policies": {
+    "require-auth0": {
+      "type": "apiKeyOrAuth0"
+    }
+  }
 }
 ```
 
