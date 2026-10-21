@@ -46,10 +46,10 @@ test("rejects v1 shape and unknown keys at every object level", () => {
   assert.equal(validateGatewayConfig({ routes: [], policies: [] }).valid, false);
   const cases = [
     { ...config, extra: true },
-    { ...config, origins: { ...config.origins, "udemy-cookies": { ...config.origins["udemy-cookies"], extra: true } } },
+    { ...config, origins: { ...config.origins, "udemy-v3": { ...config.origins["udemy-v3"], extra: true } } },
     { ...config, policies: { ...config.policies, "udemy-cors": { ...config.policies["udemy-cors"], extra: true } } },
     { ...config, routes: [{ ...config.routes[0], extra: true }] },
-    { ...config, origins: { ...config.origins, "udemy-cookies": { ...config.origins["udemy-cookies"], options: { ...config.origins["udemy-cookies"].options, extra: true } } } },
+    { ...config, origins: { ...config.origins, "udemy-v3": { ...config.origins["udemy-v3"], options: { ...config.origins["udemy-v3"].options, extra: true } } } },
   ];
   for (const value of cases) assert.equal(validateGatewayConfig(value).valid, false);
 });
@@ -66,10 +66,10 @@ test("rejects invalid methods and malformed type-specific options", () => {
 });
 
 test("rejects a route missing origin.type", () => {
-  const { type: _type, ...originWithoutType } = config.origins["udemy-cookies"];
+  const { type: _type, ...originWithoutType } = config.origins["udemy-v3"];
   const value = {
     ...config,
-    origins: { ...config.origins, "udemy-cookies": originWithoutType },
+    origins: { ...config.origins, "udemy-v3": originWithoutType },
   };
   const result = validateGatewayConfig(value);
 
