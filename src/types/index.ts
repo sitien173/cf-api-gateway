@@ -32,8 +32,6 @@ export type TResponsePolicyHandler<TOptions = unknown> = {
   ): void | Response | Promise<void | Response>;
 }["handle"];
 
-export type TPolicyName = string;
-
 export type TRequestPolicy = {
   handler: TRequestPolicyHandler;
   options: unknown;

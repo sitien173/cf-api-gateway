@@ -25,8 +25,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Type-check and test
-        run: npm run check
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Test with coverage
+        run: npm run test:coverage
 
       - name: Validate Wrangler types
         run: npm run types:check

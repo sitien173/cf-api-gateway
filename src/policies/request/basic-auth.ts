@@ -7,24 +7,24 @@ type basicAuthtOptions = {
   password: string;
 };
 
-export const basicAuth: TRequestPolicyHandler<basicAuthtOptions> = async (
+export const basicAuth: TRequestPolicyHandler<basicAuthtOptions> = (
   request: IRequest,
   options: basicAuthtOptions
 ) => {
   const authHeader = request.headers.get("Authorization");
 
   if (!authHeader) {
-    return new ErrorResponse("Authorization header is missing", 401);
+    return Promise.resolve(new ErrorResponse("Authorization header is missing", 401));
   }
   const basicMatch = /^Basic\s+(\S+)$/i.exec(authHeader.trim());
   if (!basicMatch) {
-    return new ErrorResponse("Authorization format is incorrect. Correct format: 'Basic {base64({user}:{password})}'", 401);
+    return Promise.resolve(new ErrorResponse("Authorization format is incorrect. Correct format: 'Basic {base64({user}:{password})}'", 401));
   }
 
   const encodedToken = basicMatch[1];
   if (!constantTimeEqual(btoa(options.username + ":" + options.password), encodedToken)) {
-    return new ErrorResponse("Incorrect basic authentication", 401);
+    return Promise.resolve(new ErrorResponse("Incorrect basic authentication", 401));
   }
 
-    return request;
+    return Promise.resolve(request);
 };

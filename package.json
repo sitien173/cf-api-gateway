@@ -16,6 +16,7 @@
     "bundle": "wrangler deploy --dry-run --outdir dist",
     "lint": "eslint .",
     "test": "tsx --test test/**/*.test.ts",
+    "test:coverage": "mkdir -p coverage && tsx --test --experimental-test-coverage --test-coverage-include='src/**' --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=coverage/lcov.info test/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test",
     "types": "wrangler types",

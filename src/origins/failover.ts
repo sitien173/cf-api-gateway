@@ -47,7 +47,7 @@ export const getHealthStatus = async (
     return cached.healthy ?? cached.refresh;
   }
 
-  if (cached && cached.healthy !== undefined && now - cached.timestamp < cacheTtl) {
+  if (cached?.healthy !== undefined && now - cached.timestamp < cacheTtl) {
     return cached.healthy;
   }
 
@@ -303,18 +303,42 @@ export const executeFailoverOrigin = async (
   });
 };
 
-export const executeFailover = async ({
-  request,
-  primaryUrl,
-  fallbackUrl,
-  primaryHealthy,
-  wrapResponse,
-  onPrimaryFailure,
-  onFallbackStarted,
-  onFallbackCompleted,
-  onRequestFailed,
-  onFallbackFailed,
-}: FailoverOptions): Promise<Response> => {
+// Fallback only runs for retryable methods, whose body is already buffered.
+const fetchFallback = async (
+  {
+    request,
+    fallbackUrl,
+    wrapResponse,
+    onFallbackStarted,
+    onFallbackCompleted,
+    onFallbackFailed,
+  }: FailoverOptions,
+  body: UpstreamBody,
+): Promise<Response> => {
+  onFallbackStarted?.();
+  let fallbackResponse: Response;
+  try {
+    fallbackResponse = await fetchUpstream(request, fallbackUrl, body, false);
+  } catch {
+    onFallbackFailed?.();
+    return new ErrorResponse("All upstreams failed", 503);
+  }
+  onFallbackCompleted?.(fallbackResponse.status);
+  return wrapResponse(fallbackResponse);
+};
+
+export const executeFailover = async (
+  options: FailoverOptions,
+): Promise<Response> => {
+  const {
+    request,
+    primaryUrl,
+    fallbackUrl,
+    primaryHealthy,
+    wrapResponse,
+    onPrimaryFailure,
+    onRequestFailed,
+  } = options;
   const shouldRetry = canRetry(request.method);
   let body: UpstreamBody;
 
@@ -343,21 +367,7 @@ export const executeFailover = async ({
       return new ErrorResponse("All upstreams failed", 503);
     }
 
-    onFallbackStarted?.();
-    let fallbackResponse: Response;
-    try {
-      fallbackResponse = await fetchUpstream(
-        request,
-        fallbackUrl,
-        body,
-        !shouldRetry && body !== null && body !== undefined,
-      );
-    } catch {
-      onFallbackFailed?.();
-      return new ErrorResponse("All upstreams failed", 503);
-    }
-    onFallbackCompleted?.(fallbackResponse.status);
-    return wrapResponse(fallbackResponse);
+    return fetchFallback(options, body);
   }
 
   if (firstIsPrimary && firstResponse.status >= 500) {
@@ -372,22 +382,7 @@ export const executeFailover = async ({
     } catch {
       // A failed cancellation must not prevent the single safe retry.
     }
-    onFallbackStarted?.();
-
-    let fallbackResponse: Response;
-    try {
-      fallbackResponse = await fetchUpstream(
-        request,
-        fallbackUrl,
-        body,
-        !shouldRetry && body !== null && body !== undefined,
-      );
-    } catch {
-      onFallbackFailed?.();
-      return new ErrorResponse("All upstreams failed", 503);
-    }
-    onFallbackCompleted?.(fallbackResponse.status);
-    return wrapResponse(fallbackResponse);
+    return fetchFallback(options, body);
   }
 
   return wrapResponse(firstResponse);

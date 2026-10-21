@@ -4,7 +4,7 @@ type ChangeMethodOptions = {
   method: string;
 };
 
-export const changeMethod: TRequestPolicyHandler<ChangeMethodOptions> = async (
+export const changeMethod: TRequestPolicyHandler<ChangeMethodOptions> = (
   request: IRequest,
   options: ChangeMethodOptions
 ) => {
@@ -28,5 +28,5 @@ export const changeMethod: TRequestPolicyHandler<ChangeMethodOptions> = async (
   const newRequest = new Request(request.url, initRequest) as IRequest;
   newRequest.user = request.user;
 
-  return newRequest;
+  return Promise.resolve(newRequest);
 };

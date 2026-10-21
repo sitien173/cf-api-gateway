@@ -73,7 +73,7 @@ const hashDocument = (raw: string): string => {
   let hash = 2166136261;
 
   for (let index = 0; index < raw.length; index += 1) {
-    hash ^= raw.charCodeAt(index);
+    hash ^= raw.codePointAt(index) ?? 0;
     hash = Math.imul(hash, 16777619);
   }
 
@@ -209,6 +209,24 @@ const getInlineRefreshCandidate = async (
   }
 };
 
+const getLkgCandidate = async (
+  env: ResolverEnv,
+  handlers: GatewayHandlers,
+  dependencies: ResolveGatewayDependencies,
+): Promise<CandidateResult> => {
+  try {
+    const lkg = await readLkg(env);
+    if (!lkg) {
+      logCandidateFailure(dependencies, "lkg", "No last-known-good document");
+      return undefined;
+    }
+    return tryCandidate("lkg", lkg.raw, handlers, dependencies);
+  } catch (error) {
+    logCandidateFailure(dependencies, "lkg", errorMessage(error));
+    return undefined;
+  }
+};
+
 export const createGatewayResolver = () => {
   let client: IConfigCatClient | undefined;
   let compiled: CompiledGateway | undefined;
@@ -271,23 +289,9 @@ export const createGatewayResolver = () => {
       }
     }
 
-    try {
-      const lkg = await readLkg(env);
-      if (lkg) {
-        const lkgCandidate = tryCandidate(
-          "lkg",
-          lkg.raw,
-          handlers,
-          dependencies,
-        );
-        if (lkgCandidate) {
-          return { accepted: true, candidate: lkgCandidate };
-        }
-      } else {
-        logCandidateFailure(dependencies, "lkg", "No last-known-good document");
-      }
-    } catch (error) {
-      logCandidateFailure(dependencies, "lkg", errorMessage(error));
+    const lkgCandidate = await getLkgCandidate(env, handlers, dependencies);
+    if (lkgCandidate) {
+      return { accepted: true, candidate: lkgCandidate };
     }
 
     if (configCatClient) {

@@ -1,4 +1,2 @@
-import { addHeaders } from "./add-headers";
-import { cors } from "./cors";
-
-export { addHeaders, cors };
+export { addHeaders } from "./add-headers";
+export { cors } from "./cors";

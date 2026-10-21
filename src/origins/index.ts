@@ -1,5 +1,3 @@
-import { url } from "./url";
-import { upstreamWithFallback } from "./upstreamWithFallback";
-import { proxyAll } from "./proxyAll";
-
-export { url, upstreamWithFallback, proxyAll };
+export { url } from "./url";
+export { upstreamWithFallback } from "./upstreamWithFallback";
+export { proxyAll } from "./proxyAll";
