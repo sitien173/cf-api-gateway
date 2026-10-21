@@ -134,8 +134,9 @@ const compileRouteMethod = (
     routeLabel,
   );
 
-  // GET, HEAD, and OPTIONS routes are auth-optional by design; all other methods require gateway auth.
-  const requiresAuth = !publicMethods.has(method);
+  // GET, HEAD, and OPTIONS routes are auth-optional by design; all other methods require gateway auth
+  // unless the route sets auth "none" because the origin enforces its own auth.
+  const requiresAuth = !publicMethods.has(method) && route.auth !== "none";
   const hasGatewayAuthPolicy = requestNames.some(
     (name) => config.policies[name]?.type === "apiKeyOrAuth0",
   );

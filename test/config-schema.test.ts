@@ -61,6 +61,8 @@ test("rejects invalid methods and malformed type-specific options", () => {
   }
   assert.equal(validateGatewayConfig({ ...config, policies: { cors: { type: "cors", options: { allowedMethods: [], allowedHeaders: [], allowCredentials: false } } } }).valid, false);
   assert.equal(validateGatewayConfig({ ...config, origins: { broken: { type: "url", options: {} } } }).valid, false);
+  assert.equal(validateGatewayConfig({ ...config, routes: [{ ...baseRoute, auth: "none" }] }).valid, true);
+  assert.equal(validateGatewayConfig({ ...config, routes: [{ ...baseRoute, auth: "optional" }] }).valid, false);
 });
 
 test("rejects a route missing origin.type", () => {

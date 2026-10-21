@@ -368,7 +368,8 @@ Add rate limiting policy:
 
 ### Authentication Policies
 
-Mutation routes must use the `apiKeyOrAuth0` policy type. Auth0 values are read only
+Mutation routes must use the `apiKeyOrAuth0` policy type, unless the route sets
+`"auth": "none"` because its origin enforces its own auth. Auth0 values are read only
 from Worker secrets, not route configuration:
 
 ```json

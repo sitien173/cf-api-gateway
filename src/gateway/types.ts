@@ -32,6 +32,7 @@ export type RouteConfig = {
   origin: string;
   request?: string[];
   response?: string[];
+  auth?: "none";
   description?: string;
 };
 

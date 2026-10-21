@@ -31,6 +31,11 @@ test("rejects wrong-phase policies, duplicate method routes, and unauthenticated
   assert.throws(() => compileGateway(config({ routes: [{ path: "/x", methods: ["POST"], origin: "main" }] }), handlers), /apiKeyOrAuth0/);
 });
 
+test("allows unauthenticated POST when route opts out with auth none", () => {
+  const compiled = compileGateway(config({ routes: [{ path: "/x", methods: ["POST"], origin: "main", auth: "none" }] }), handlers);
+  assert.deepEqual(compiled.routes.map(({ method }) => method), ["POST"]);
+});
+
 test("rejects credentialed wildcard CORS policy", () => {
   assert.throws(() => compileGateway(config({ policies: { bad: { type: "cors", options: { allowedOrigins: ["*"], allowCredentials: true } } }, routes: [] }), handlers), /CORS policy bad cannot combine wildcard allowed origins with credentials/);
 });

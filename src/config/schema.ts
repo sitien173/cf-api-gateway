@@ -147,6 +147,7 @@ export const gatewayConfigSchema: Schema = closed(
           origin: { type: "string" },
           request: stringArray,
           response: stringArray,
+          auth: { type: "string", enum: ["none"] },
           description: { type: "string" },
         },
         ["path", "methods", "origin"],
