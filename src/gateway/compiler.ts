@@ -92,6 +92,13 @@ const assertCorsPolicies = (config: GatewayConfig): void => {
   }
 };
 
+// Bare and ^~ prefixes share a key; regexes key on the full path so ~ and ~* differ.
+const duplicateKey = (matchMode: RouteMatchMode, pattern: string, path: string): string => {
+  if (matchMode === "exact") return `exact:${pattern}`;
+  if (matchMode === "regex") return `regex:${path}`;
+  return `prefix:${pattern}`;
+};
+
 const compileRouteMethod = (
   route: GatewayConfig["routes"][number],
   configuredMethod: string,
@@ -124,13 +131,7 @@ const compileRouteMethod = (
       { cause: error },
     );
   }
-  const duplicateKey =
-    parsedPath.matchMode === "exact"
-      ? `exact:${parsedPath.pattern}`
-      : parsedPath.matchMode === "prefix" || parsedPath.matchMode === "prefixStop"
-        ? `prefix:${parsedPath.pattern}`
-        : `regex:${route.path}`;
-  const routeKey = `${method}\0${duplicateKey}`;
+  const routeKey = `${method}\0${duplicateKey(parsedPath.matchMode, parsedPath.pattern, route.path)}`;
   if (seenRoutes.has(routeKey)) {
     throw new Error(`${routeLabel}duplicate path and method`);
   }
@@ -178,8 +179,14 @@ const compileRouteMethod = (
   };
 };
 
-const routeTier = (route: CompiledRoute): number =>
-  route.matchMode === "exact" ? 0 : route.matchMode === "regex" ? 2 : 1;
+const routeTiers: Record<RouteMatchMode, number> = {
+  exact: 0,
+  prefix: 1,
+  prefixStop: 1,
+  regex: 2,
+};
+
+const routeTier = (route: CompiledRoute): number => routeTiers[route.matchMode];
 
 const compareRoutes = (left: CompiledRoute, right: CompiledRoute): number => {
   const matchModeOrder = routeTier(left) - routeTier(right);

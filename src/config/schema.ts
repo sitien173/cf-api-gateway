@@ -128,7 +128,7 @@ export const gatewayConfigSchema: Schema = closed(
         {
           path: {
             type: "string",
-            pattern: "^(?:(?:= |\\^~ )?(?!.*/\\*$)/\\S*|~\\*? \\S+)$",
+            pattern: String.raw`^(?:(?:= |\^~ )?(?!.*/\*$)/\S*|~\*? \S+)$`,
           },
           methods: {
             type: "array",

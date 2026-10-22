@@ -15,6 +15,13 @@ const analyticsRouteMissLabel = "route_miss";
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const isPrefixRoute = (route: CompiledRoute): boolean =>
+  route.matchMode === "prefix" || route.matchMode === "prefixStop";
+
+const matchesPattern = (route: CompiledRoute, pathname: string): boolean =>
+  route.matchMode === "exact" ? pathname === route.pattern : route.regex?.test(pathname) === true;
+
+// Routes are sorted exact, then prefixes longest first, then regexes in document order.
 const resolveRoute = (
   gateway: CompiledGateway,
   request: Request,
@@ -22,22 +29,19 @@ const resolveRoute = (
   methodOverride?: string,
 ): CompiledRoute | undefined => {
   const requestMethod = methodOverride ?? request.method;
+  const { pathname } = requestUrl;
   let rememberedPrefix: CompiledRoute | undefined;
   let prefixMatched = false;
   for (const route of gateway.routes) {
     if (route.method !== requestMethod) continue;
-    if (route.matchMode === "exact") {
-      if (requestUrl.pathname === route.pattern) return route;
-      continue;
-    }
-    if (route.matchMode === "prefix" || route.matchMode === "prefixStop") {
-      if (prefixMatched || !requestUrl.pathname.startsWith(route.pattern)) continue;
+    if (isPrefixRoute(route)) {
+      if (prefixMatched || !pathname.startsWith(route.pattern)) continue;
       prefixMatched = true;
       if (route.matchMode === "prefixStop") return route;
       rememberedPrefix = route;
-      continue;
+    } else if (matchesPattern(route, pathname)) {
+      return route;
     }
-    if (route.regex?.test(requestUrl.pathname)) return route;
   }
   return rememberedPrefix;
 };
