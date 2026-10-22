@@ -126,7 +126,10 @@ export const gatewayConfigSchema: Schema = closed(
       type: "array",
       items: closed(
         {
-          path: { type: "string", pattern: "^/" },
+          path: {
+            type: "string",
+            pattern: "^(?:(?:= |\\^~ )?(?!.*/\\*$)/\\S*|~\\*? \\S+)$",
+          },
           methods: {
             type: "array",
             minItems: 1,

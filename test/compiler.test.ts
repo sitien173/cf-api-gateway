@@ -36,6 +36,46 @@ test("allows unauthenticated POST when route opts out with auth none", () => {
   assert.deepEqual(compiled.routes.map(({ method }) => method), ["POST"]);
 });
 
+test("parses nginx route modes, preserves raw paths, and orders routes", () => {
+  const compiled = compileGateway(config({ routes: [
+    { path: "~ ^/a/b", methods: ["GET"], origin: "main" },
+    { path: "/a/b/c", methods: ["GET"], origin: "main" },
+    { path: "^~ /a/", methods: ["GET"], origin: "main" },
+    { path: "= /a", methods: ["GET"], origin: "main" },
+    { path: "~* \\.PNG$", methods: ["GET"], origin: "main" },
+    { path: "/a", methods: ["GET"], origin: "main" },
+  ] }), handlers);
+  assert.deepEqual(compiled.routes.map(({ path, pattern, matchMode, regex, order }) => ({ path, pattern, matchMode, regex: regex?.flags, order })), [
+    { path: "= /a", pattern: "/a", matchMode: "exact", regex: undefined, order: 3 },
+    { path: "/a/b/c", pattern: "/a/b/c", matchMode: "prefix", regex: undefined, order: 1 },
+    { path: "^~ /a/", pattern: "/a/", matchMode: "prefixStop", regex: undefined, order: 2 },
+    { path: "/a", pattern: "/a", matchMode: "prefix", regex: undefined, order: 5 },
+    { path: "~ ^/a/b", pattern: "^/a/b", matchMode: "regex", regex: "", order: 0 },
+    { path: "~* \\.PNG$", pattern: "\\.PNG$", matchMode: "regex", regex: "i", order: 4 }
+  ]);
+  assert.equal(compiled.routes.some(({ regex }) => regex?.global || regex?.sticky), false);
+});
+
+test("rejects invalid regex and duplicate nginx location keys but allows exact and prefix", () => {
+  assert.throws(() => compileGateway(config({ routes: [{ path: "~ [", methods: ["GET"], origin: "main" }] }), handlers), /Route GET ~ \[: invalid regex/);
+  assert.throws(() => compileGateway(config({ routes: [
+    { path: "/x/", methods: ["GET"], origin: "main" },
+    { path: "^~ /x/", methods: ["GET"], origin: "main" },
+  ] }), handlers), /duplicate path and method/);
+  assert.doesNotThrow(() => compileGateway(config({ routes: [
+    { path: "= /x", methods: ["GET"], origin: "main" },
+    { path: "/x", methods: ["GET"], origin: "main" },
+  ] }), handlers));
+});
+
+test("proxyAll does not alter a route's configured match mode", () => {
+  const compiled = compileGateway(config({
+    origins: { main: { type: "proxyAll" } },
+    routes: [{ path: "= /x", methods: ["GET"], origin: "main" }],
+  }), { ...handlers, origins: { proxyAll: async () => new Response("ok") } });
+  assert.equal(compiled.routes[0].matchMode, "exact");
+});
+
 test("rejects credentialed wildcard CORS policy", () => {
   assert.throws(() => compileGateway(config({ policies: { bad: { type: "cors", options: { allowedOrigins: ["*"], allowCredentials: true } } }, routes: [] }), handlers), /CORS policy bad cannot combine wildcard allowed origins with credentials/);
 });

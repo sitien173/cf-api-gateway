@@ -106,7 +106,7 @@ The document has three required top-level keys. The schema is closed: an unknown
   "routes": [
     {
       "description": "V3 API writes",
-      "path": "/udemy/v3/api/*",
+      "path": "/udemy/v3/api/",
       "methods": ["POST", "PUT", "DELETE"],
       "origin": "udemy-v3",
       "request": ["require-auth"],
@@ -122,7 +122,7 @@ Every origin and policy entry may carry a `description` string.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `path` | yes | Path starting with `/`. A trailing `/*` makes the route a prefix route. |
+| `path` | yes | One of the nginx-style location forms described below. |
 | `methods` | yes | Non-empty, unique list from `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`. |
 | `origin` | yes | Key of an entry in `origins`. |
 | `request` | no | Ordered list of request policy keys. |
@@ -132,11 +132,11 @@ Every origin and policy entry may carry a `description` string.
 
 ### Route matching
 
-- Each method in `methods` compiles to a separate route. Two routes with the same path and method reject the document.
-- A route is a prefix route when its origin type is `proxyAll` or its path ends in `/*`. All other routes match the exact pathname. The query string is never used for matching.
-- `/*` compiles to a trailing slash, so `/vault/*` matches `/vault/` and everything below it but not `/vault`. Add a separate exact route for the bare path, as `src/config.json` does.
-- A prefix path without a trailing slash, such as a `proxyAll` route at `/udemy`, matches `/udemy` and paths under `/udemy/`.
-- Routes are tried with exact routes first, then by descending path length. The first match wins.
+- Each method in `methods` compiles to a separate route. Supported `path` forms are `= /p` (exact), `^~ /p` (prefix that stops regex search), `~ re` (case-sensitive regex), `~* re` (case-insensitive regex), and bare `/p` (prefix).
+- Selection order is exact first, then prefixes by descending pattern length, then regexes in document order. Regex search is skipped only when the longest matching prefix is a `^~` prefix; otherwise the first regex hit wins, falling back to the longest matching plain prefix if no regex matches.
+- Duplicate keys are per method: exact patterns duplicate only other exact patterns; bare and `^~` prefixes with the same pattern duplicate each other; regex duplicates use the raw configured regex path. An exact and prefix location may share a pattern.
+- Matching uses the raw `URL.pathname`; the query string is not considered. Bare prefixes use `startsWith`, so `/p` matches `/p`, `/p/child`, and `/px`.
+- The trailing `/*` form is rejected. `proxyAll` no longer implies prefix matching; choose the desired prefix form explicitly. Regexes are trusted configuration and run without a ReDoS guard.
 
 ### Compile-time rules
 
@@ -167,7 +167,7 @@ A network failure or timeout returns `500` with `{"message":"Origin request fail
 
 ### `proxyAll` and `upstreamWithFallback`
 
-Both types run the same failover handler in `src/origins/failover.ts`. They differ in matching only: `proxyAll` routes are always prefix routes.
+Both types run the same failover handler in `src/origins/failover.ts`. Route matching is determined only by the route's `path`; `proxyAll` has no implicit prefix behavior.
 
 | Option | Required | Default | Meaning |
 |---|---|---|---|

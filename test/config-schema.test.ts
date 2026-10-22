@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 
 import config from "../src/config.json";
 import { validateGatewayConfig } from "../src/config/schema.ts";
+import { compileGateway } from "../src/gateway/compiler.ts";
+import * as requestPolicies from "../src/policies/request/index.ts";
+import * as responsePolicies from "../src/policies/response/index.ts";
+import * as origins from "../src/origins/index.ts";
 
 test("accepts the current gateway configuration", () => {
   const result = validateGatewayConfig(config);
@@ -12,6 +16,25 @@ test("accepts the current gateway configuration", () => {
     assert.equal(result.config.routes.length, config.routes.length);
     assert.equal(result.config.policies.length, config.policies.length);
   }
+});
+
+test("bundled config compiles with migrated routes", () => {
+  const result = validateGatewayConfig(config);
+  assert.equal(result.valid, true);
+  if (!result.valid) return;
+  const gateway = compileGateway(result.config, { requestPolicies, responsePolicies, origins });
+  const route = (method: string, path: string) => gateway.routes.find((candidate) =>
+    candidate.method === method && (candidate.matchMode === "exact"
+      ? candidate.pattern === path
+      : candidate.matchMode === "regex"
+        ? candidate.regex?.test(path)
+        : path.startsWith(candidate.pattern)),
+  );
+  assert.equal(route("GET", "/vault")?.path, "~ ^/vault(/|$)");
+  assert.equal(route("POST", "/vault/api/x")?.path, "~ ^/vault(/|$)");
+  assert.equal(route("GET", "/sonarqube")?.path, "~ ^/sonarqube(/|$)");
+  assert.equal(route("GET", "/udemy/v3/api/x")?.path, "/udemy/v3/api/");
+  assert.notEqual(route("GET", "/vaultx")?.path, "~ ^/vault(/|$)");
 });
 
 test("rejects a document missing routes", () => {
@@ -63,6 +86,13 @@ test("rejects invalid methods and malformed type-specific options", () => {
   assert.equal(validateGatewayConfig({ ...config, origins: { broken: { type: "url", options: {} } } }).valid, false);
   assert.equal(validateGatewayConfig({ ...config, routes: [{ ...baseRoute, auth: "none" }] }).valid, true);
   assert.equal(validateGatewayConfig({ ...config, routes: [{ ...baseRoute, auth: "optional" }] }).valid, false);
+});
+
+test("rejects unsupported and wildcard route path forms", () => {
+  const baseRoute = config.routes[0];
+  for (const path of ["@x", "/x/*", "= /*", "^~ /*", "/*", "=/x", "~"]) {
+    assert.equal(validateGatewayConfig({ ...config, routes: [{ ...baseRoute, path }] }).valid, false, path);
+  }
 });
 
 test("rejects a route missing origin.type", () => {

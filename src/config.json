@@ -72,7 +72,7 @@
   "routes": [
     {
       "description": "V3 root (relational API schema)",
-      "path": "/udemy/v3",
+      "path": "= /udemy/v3",
       "methods": [
         "GET"
       ],
@@ -83,7 +83,7 @@
     },
     {
       "description": "V3 API reads",
-      "path": "/udemy/v3/api/*",
+      "path": "/udemy/v3/api/",
       "methods": [
         "GET"
       ],
@@ -94,7 +94,7 @@
     },
     {
       "description": "V3 API writes",
-      "path": "/udemy/v3/api/*",
+      "path": "/udemy/v3/api/",
       "methods": [
         "POST",
         "PUT",
@@ -110,18 +110,7 @@
     },
     {
       "description": "SonarQube, auth handled by SonarQube",
-      "path": "/sonarqube",
-      "methods": [
-        "GET"
-      ],
-      "origin": "sonarqube",
-      "auth": "none",
-      "response": [
-        "allow-all-cors"
-      ]
-    },
-    {
-      "path": "/sonarqube/*",
+      "path": "~ ^/sonarqube(/|$)",
       "methods": [
         "GET",
         "POST",
@@ -139,18 +128,7 @@
     },
     {
       "description": "Vaultwarden, auth handled by Vaultwarden",
-      "path": "/vault",
-      "methods": [
-        "GET"
-      ],
-      "origin": "vaultwarden",
-      "auth": "none",
-      "response": [
-        "allow-all-cors"
-      ]
-    },
-    {
-      "path": "/vault/*",
+      "path": "~ ^/vault(/|$)",
       "methods": [
         "GET",
         "POST",

@@ -60,13 +60,16 @@ export type CompiledResponsePolicy = {
   handler: TResponsePolicyHandler;
 };
 
-export type RouteMatchMode = "exact" | "prefix";
+export type RouteMatchMode = "exact" | "prefix" | "prefixStop" | "regex";
 
 export type CompiledRoute = {
   path: string;
+  pattern: string;
   method: string;
   originType: string;
   matchMode: RouteMatchMode;
+  regex?: RegExp;
+  order: number;
   origin: {
     handler: TOriginHandler;
     options?: unknown;

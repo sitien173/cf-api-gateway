@@ -15,18 +15,6 @@ const analyticsRouteMissLabel = "route_miss";
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-const matchesPrefix = (pathname: string, prefix: string): boolean => {
-  if (prefix === "/") {
-    return pathname.startsWith("/");
-  }
-
-  if (prefix.endsWith("/")) {
-    return pathname.startsWith(prefix);
-  }
-
-  return pathname === prefix || pathname.startsWith(`${prefix}/`);
-};
-
 const resolveRoute = (
   gateway: CompiledGateway,
   request: Request,
@@ -34,17 +22,24 @@ const resolveRoute = (
   methodOverride?: string,
 ): CompiledRoute | undefined => {
   const requestMethod = methodOverride ?? request.method;
-  return gateway.routes.find((route) => {
-    if (route.method !== requestMethod) {
-      return false;
+  let rememberedPrefix: CompiledRoute | undefined;
+  let prefixMatched = false;
+  for (const route of gateway.routes) {
+    if (route.method !== requestMethod) continue;
+    if (route.matchMode === "exact") {
+      if (requestUrl.pathname === route.pattern) return route;
+      continue;
     }
-
-    if (route.matchMode === "prefix") {
-      return matchesPrefix(requestUrl.pathname, route.path);
+    if (route.matchMode === "prefix" || route.matchMode === "prefixStop") {
+      if (prefixMatched || !requestUrl.pathname.startsWith(route.pattern)) continue;
+      prefixMatched = true;
+      if (route.matchMode === "prefixStop") return route;
+      rememberedPrefix = route;
+      continue;
     }
-
-    return route.path === requestUrl.pathname;
-  });
+    if (route.regex?.test(requestUrl.pathname)) return route;
+  }
+  return rememberedPrefix;
 };
 
 const applyResponsePolicies = async (

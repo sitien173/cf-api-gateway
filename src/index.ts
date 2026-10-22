@@ -37,9 +37,11 @@ const createUnavailableGateway = (request: IRequest): CompiledGateway => ({
   routes: [
     {
       path: new URL(request.url).pathname,
+      pattern: new URL(request.url).pathname,
       method: request.method,
       originType: "configuration-unavailable",
       matchMode: "exact",
+      order: 0,
       origin: {
         handler: () =>
           Promise.resolve(

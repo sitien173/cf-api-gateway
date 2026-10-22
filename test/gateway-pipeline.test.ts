@@ -286,7 +286,7 @@ test("executeGatewayRequest invokes origin and response policies for a matched r
   );
 });
 
-test("executeGatewayRequest matches wildcard url routes as prefixes", async () => {
+test("executeGatewayRequest matches bare prefix routes", async () => {
   const { ctx, flush } = createContext();
   const logs: Array<{ stage: string; outcome: string; routePath?: string; status?: number }> = [];
 
@@ -298,7 +298,7 @@ test("executeGatewayRequest matches wildcard url routes as prefixes", async () =
       policies: {},
       routes: [
         {
-          path: "/udemy/v2/api/*",
+          path: "/udemy/v2/api/",
           methods: ["GET"],
           origin: "url",
           request: [],
@@ -348,7 +348,7 @@ test("executeGatewayRequest matches wildcard url routes as prefixes", async () =
   );
 });
 
-test("executeGatewayRequest keeps prefix routes within path segment boundaries", async () => {
+test("executeGatewayRequest matches bare prefixes without path segment boundaries", async () => {
   const { ctx, flush } = createContext();
   const gateway = compileGateway(
     {
@@ -384,10 +384,10 @@ test("executeGatewayRequest keeps prefix routes within path segment boundaries",
 
   await flush();
 
-  assert.equal(response.status, 404);
+  assert.equal(response.status, 200);
 });
 
-test("executeGatewayRequest preserves trailing-slash wildcard prefixes", async () => {
+test("executeGatewayRequest matches trailing-slash prefixes", async () => {
   const { ctx, flush } = createContext();
   const gateway = compileGateway(
     {
@@ -397,7 +397,7 @@ test("executeGatewayRequest preserves trailing-slash wildcard prefixes", async (
       policies: {},
       routes: [
         {
-          path: "/api/*",
+          path: "/api/",
           methods: ["GET"],
           origin: "proxy-all",
           request: [],
@@ -435,14 +435,14 @@ test("executeGatewayRequest preserves trailing-slash wildcard prefixes", async (
 
 test("executeGatewayRequest resolves exact routes before broader prefixes", async () => {
   const prefixRoute = {
-    path: "/api/*",
+    path: "/api/",
     methods: ["GET"],
     origin: "proxy-all",
     request: [],
     response: [],
   };
   const exactRoute = {
-    path: "/api/orders",
+    path: "= /api/orders",
     methods: ["GET"],
     origin: "url",
     request: [],
@@ -473,17 +473,102 @@ test("executeGatewayRequest resolves exact routes before broader prefixes", asyn
       },
       handlers,
     );
-    const response = await executeGatewayRequest(
+    const request = (path: string) => executeGatewayRequest(
       gateway,
-      new Request("https://gateway.example.com/api/orders"),
+      new Request(`https://gateway.example.com${path}`),
       { ANALYTICS_ENABLED: "false", GATEWAY_NAME: "test-gateway" },
       ctx,
     );
+    const response = await request("/api/orders");
+    const childResponse = await request("/api/orders/1");
+    const suffixedResponse = await request("/api/ordersx");
 
     await flush();
 
     assert.equal(await response.text(), "exact");
+    assert.equal(await childResponse.text(), "prefix");
+    assert.equal(await suffixedResponse.text(), "prefix");
   }
+});
+
+test("executeGatewayRequest follows nginx exact, prefix-stop, and regex selection order", async () => {
+  const { ctx, flush } = createContext();
+  const gateway = compileGateway({
+    origins: {
+      exact: { type: "exact" }, stop: { type: "stop" }, regex: { type: "regex" }, plain: { type: "plain" },
+      later: { type: "later" }, insensitive: { type: "insensitive" },
+    },
+    policies: {},
+    routes: [
+      { path: "~ ^/a/b", methods: ["GET"], origin: "regex" },
+      { path: "= /a", methods: ["GET"], origin: "exact" },
+      { path: "^~ /a/", methods: ["GET"], origin: "stop" },
+      { path: "/a/b/c", methods: ["GET"], origin: "plain" },
+      { path: "~ ^/a/b", methods: ["POST"], origin: "later", auth: "none" },
+      { path: "~* \\.PNG$", methods: ["GET"], origin: "insensitive" },
+    ],
+  }, {
+    requestPolicies: {}, responsePolicies: {},
+    origins: Object.fromEntries(["exact", "stop", "regex", "plain", "later", "insensitive"].map((name) => [name, async () => new Response(name)])),
+  });
+  const resolve = async (method: string, path: string) => {
+    const response = await executeGatewayRequest(gateway, new Request(`https://gateway.example.com${path}`, { method }), {}, ctx);
+    return response.text();
+  };
+  assert.equal(await resolve("GET", "/a"), "exact");
+  assert.equal(await resolve("GET", "/a/b"), "stop");
+  assert.equal(await resolve("GET", "/a/b/c/d"), "regex");
+  assert.equal(await resolve("POST", "/a/b"), "later");
+  assert.equal(await resolve("GET", "/x.png"), "insensitive");
+  await flush();
+});
+
+test("an earlier regex wins over later regexes and longer plain prefixes, with prefix fallback", async () => {
+  const { ctx, flush } = createContext();
+  const gateway = compileGateway({
+    origins: { plain: { type: "plain" }, first: { type: "first" }, second: { type: "second" } },
+    policies: {},
+    routes: [
+      { path: "/a/b/c", methods: ["GET"], origin: "plain" },
+      { path: "~ ^/a", methods: ["GET"], origin: "first" },
+      { path: "~ ^/a/b", methods: ["GET"], origin: "second" },
+    ],
+  }, {
+    requestPolicies: {}, responsePolicies: {},
+    origins: { plain: async () => new Response("plain"), first: async () => new Response("first"), second: async () => new Response("second") },
+  });
+  const send = (path: string) => executeGatewayRequest(gateway, new Request(`https://gateway.example.com${path}`), {}, ctx);
+  assert.equal(await (await send("/a/b/c/d")).text(), "first");
+  await flush();
+
+  const fallback = compileGateway({
+    origins: { plain: { type: "plain" }, regex: { type: "regex" } }, policies: {},
+    routes: [{ path: "/a/", methods: ["GET"], origin: "plain" }, { path: "~ ^/z", methods: ["GET"], origin: "regex" }],
+  }, { requestPolicies: {}, responsePolicies: {}, origins: { plain: async () => new Response("plain"), regex: async () => new Response("regex") } });
+  assert.equal(await (await executeGatewayRequest(fallback, new Request("https://gateway.example.com/a/q"), {}, ctx)).text(), "plain");
+  await flush();
+});
+
+test("analytics and logs preserve the configured route path", async () => {
+  const { ctx, flush } = createContext();
+  const routePath = "~ ^/vault(/|$)";
+  const gateway = compileGateway({
+    origins: { vault: { type: "vault" } }, policies: {},
+    routes: [{ path: routePath, methods: ["GET"], origin: "vault" }],
+  }, {
+    requestPolicies: {}, responsePolicies: {},
+    origins: { vault: async () => new Response("ok") },
+  });
+  let analyticsPath = "";
+  const loggedPaths: string[] = [];
+  await executeGatewayRequest(gateway, new Request("https://gateway.example.com/vault/api"), {}, ctx, {
+    logAnalytics: async (event) => { analyticsPath = event.routePath; },
+    logEvent: (event) => { if (event.routePath) loggedPaths.push(event.routePath); },
+  });
+  await flush();
+  assert.equal(analyticsPath, routePath);
+  assert.ok(loggedPaths.length > 0);
+  assert.ok(loggedPaths.every((path) => path === routePath));
 });
 
 test("executeGatewayRequest handles CORS preflight without hitting origin", async () => {
@@ -509,7 +594,7 @@ test("executeGatewayRequest handles CORS preflight without hitting origin", asyn
       },
       routes: [
         {
-          path: "/udemy/v2/api/*",
+          path: "/udemy/v2/api/",
           methods: ["GET"],
           origin: "url",
           request: [],
