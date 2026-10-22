@@ -2,69 +2,34 @@
   "origins": {
     "udemy-v3": {
       "type": "url",
-      "options": {
-        "url": "https://udemy.tienngodev.io.vn",
-        "pathRewrite": "/udemy/v3"
-      }
+      "options": { "url": "https://udemy.miseops.site", "pathRewrite": "/udemy/v3" }
     },
     "sonarqube": {
       "type": "url",
-      "options": {
-        "url": "https://sonarquebe.tienngodev.io.vn",
-        "pathRewrite": "/",
-        "timeout": 30000
-      }
+      "options": { "url": "https://sonarqube.miseops.site", "pathRewrite": "/", "timeout": 30000 }
     },
     "vaultwarden": {
       "type": "url",
-      "options": {
-        "url": "https://vault.tienngodev.io.vn",
-        "pathRewrite": "/",
-        "timeout": 30000
-      }
+      "options": { "url": "https://vault.miseops.site", "pathRewrite": "/", "timeout": 30000 }
     }
   },
   "policies": {
-    "require-auth": {
-      "type": "apiKeyOrAuth0"
-    },
+    "require-auth": { "type": "apiKeyOrAuth0" },
     "udemy-cors": {
       "type": "cors",
       "options": {
-        "allowedOrigins": [
-          "*.udemy.com"
-        ],
-        "allowedMethods": [
-          "GET",
-          "POST",
-          "PUT",
-          "DELETE",
-          "OPTIONS"
-        ],
-        "allowedHeaders": [
-          "*"
-        ],
+        "allowedOrigins": ["*.udemy.com"],
+        "allowedMethods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allowedHeaders": ["*"],
         "allowCredentials": true
       }
     },
     "allow-all-cors": {
       "type": "cors",
       "options": {
-        "allowedOrigins": [
-          "*"
-        ],
-        "allowedMethods": [
-          "GET",
-          "POST",
-          "PUT",
-          "DELETE",
-          "OPTIONS",
-          "HEAD",
-          "PATCH"
-        ],
-        "allowedHeaders": [
-          "*"
-        ],
+        "allowedOrigins": ["*"],
+        "allowedMethods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
+        "allowedHeaders": ["*"],
         "allowCredentials": false
       }
     }
@@ -73,76 +38,40 @@
     {
       "description": "V3 root (relational API schema)",
       "path": "= /udemy/v3",
-      "methods": [
-        "GET"
-      ],
+      "methods": ["GET"],
       "origin": "udemy-v3",
-      "response": [
-        "udemy-cors"
-      ]
+      "response": ["udemy-cors"]
     },
     {
       "description": "V3 API reads",
       "path": "/udemy/v3/api/",
-      "methods": [
-        "GET"
-      ],
+      "methods": ["GET"],
       "origin": "udemy-v3",
-      "response": [
-        "udemy-cors"
-      ]
+      "response": ["udemy-cors"]
     },
     {
       "description": "V3 API writes",
       "path": "/udemy/v3/api/",
-      "methods": [
-        "POST",
-        "PUT",
-        "DELETE"
-      ],
+      "methods": ["POST", "PUT", "DELETE"],
       "origin": "udemy-v3",
-      "request": [
-        "require-auth"
-      ],
-      "response": [
-        "udemy-cors"
-      ]
+      "request": ["require-auth"],
+      "response": ["udemy-cors"]
     },
     {
       "description": "SonarQube, auth handled by SonarQube",
       "path": "~ ^/sonarqube(/|$)",
-      "methods": [
-        "GET",
-        "POST",
-        "PUT",
-        "DELETE",
-        "OPTIONS",
-        "HEAD",
-        "PATCH"
-      ],
+      "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
       "origin": "sonarqube",
       "auth": "none",
-      "response": [
-        "allow-all-cors"
-      ]
+      "response": ["allow-all-cors"]
     },
     {
       "description": "Vaultwarden, auth handled by Vaultwarden",
       "path": "~ ^/vault(/|$)",
-      "methods": [
-        "GET",
-        "POST",
-        "PUT",
-        "DELETE",
-        "OPTIONS",
-        "HEAD",
-        "PATCH"
-      ],
+      "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
       "origin": "vaultwarden",
       "auth": "none",
-      "response": [
-        "allow-all-cors"
-      ]
+      "response": ["allow-all-cors"]
     }
   ]
 }
