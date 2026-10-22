@@ -1,36 +1,24 @@
 import { ErrorResponse } from "../helpers/response";
-import { createOriginLogContext, emitGatewayLog } from "../gateway/logging";
-import { IRequest, TOriginHandler } from "../types";
+import { createOriginLogContext } from "../gateway/logging";
+import { TOriginHandler } from "../types";
+import { closed } from "../config/schema-helpers";
+import { OriginTimeoutError, forward, stripPathPrefix, toGatewayResponse } from "./forward";
 
 type UrlOptions = {
   url: string;
+  stripPrefix?: string;
+  // Deprecated alias for stripPrefix.
   pathRewrite?: string;
   timeout?: number;
 };
 
-const joinPath = (basePath: string, suffix: string): string => {
-  const normalizedBase = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath;
-  const normalizedSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
-
-  if (!normalizedBase || normalizedBase === "") {
-    return normalizedSuffix;
-  }
-
-  return `${normalizedBase}${normalizedSuffix}`;
-};
-
-const buildOriginUrl = (request: IRequest, options: UrlOptions): string => {
-  const requestUrl = new URL(request.url);
+const buildOriginUrl = (requestUrl: URL, options: UrlOptions, prefix: string | undefined): string => {
   const originUrl = new URL(options.url);
+  const suffix = stripPathPrefix(requestUrl.pathname, prefix);
+  const isRootOriginPath = originUrl.pathname === "/" || originUrl.pathname === "";
 
-  if (options.pathRewrite && requestUrl.pathname.startsWith(options.pathRewrite)) {
-    const suffix = requestUrl.pathname.slice(options.pathRewrite.length);
-    const isRootOriginPath =
-      originUrl.pathname === "/" || originUrl.pathname === "";
-
-    if (suffix && isRootOriginPath) {
-      originUrl.pathname = joinPath(originUrl.pathname, suffix);
-    }
+  if (suffix && isRootOriginPath) {
+    originUrl.pathname = suffix;
   }
 
   originUrl.search = requestUrl.search;
@@ -38,33 +26,51 @@ const buildOriginUrl = (request: IRequest, options: UrlOptions): string => {
 };
 
 export const url: TOriginHandler<UrlOptions> = async (
-  request: IRequest,
-  options: UrlOptions
+  request: Request,
+  options: UrlOptions,
+  ctx,
 ) => {
-  const originRequest = new Request(buildOriginUrl(request, options), request);
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeout ?? 5000);
+  const requestUrl = new URL(request.url);
+  const prefix = options.stripPrefix ?? options.pathRewrite;
 
   try {
-    const originFetch = await fetch(originRequest.url, {
-      method: originRequest.method,
-      headers: originRequest.headers,
-      body: originRequest.body,
-      ...(originRequest.body ? { duplex: "half" as const } : {}),
-      signal: controller.signal,
-      redirect: "manual",
-    });
-
-    return new Response(originFetch.body, originFetch);
-  } catch {
-    emitGatewayLog(undefined, {
+    const response = await forward(
+      request,
+      buildOriginUrl(requestUrl, options, prefix),
+      request.body,
+      options.timeout,
+    );
+    return toGatewayResponse(response, requestUrl, [options.url], prefix, () =>
+      ctx.log({
+        level: "error",
+        stage: "origin_rewrite",
+        outcome: "failed",
+        ...createOriginLogContext(request, "url"),
+      }),
+    );
+  } catch (error) {
+    const timedOut = error instanceof OriginTimeoutError;
+    ctx.log({
       level: "error",
       stage: "origin",
-      outcome: "request_failed",
+      outcome: timedOut ? "timed_out" : "request_failed",
       ...createOriginLogContext(request, "url"),
     });
-    return new ErrorResponse("Origin request failed", 500);
-  } finally {
-    clearTimeout(timeoutId);
+    return timedOut
+      ? new ErrorResponse("Origin request timed out", 504)
+      : new ErrorResponse("Origin request failed", 502);
   }
+};
+
+url.optionsSchema = {
+  ...closed(
+    {
+      url: { type: "string" },
+      stripPrefix: { type: "string" },
+      pathRewrite: { type: "string" },
+      timeout: { type: "number" },
+    },
+    ["url"],
+  ),
+  not: { required: ["stripPrefix", "pathRewrite"] },
 };

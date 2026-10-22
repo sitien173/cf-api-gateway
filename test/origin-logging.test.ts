@@ -3,6 +3,13 @@ import assert from "node:assert/strict";
 
 import { proxyAll, upstreamWithFallback, url } from "../src/origins/index.ts";
 import { emitGatewayLog } from "../src/gateway/logging.ts";
+import type { OriginContext } from "../src/types/index.ts";
+
+// Origin events reach the console through the same logger the runtime falls back to.
+const originContext: OriginContext = {
+  waitUntil: () => {},
+  log: (event) => emitGatewayLog(undefined, event),
+};
 
 type LoggedEvent = Record<string, unknown>;
 
@@ -43,7 +50,7 @@ test("emitGatewayLog suppresses info below the configured level", () => {
   assert.deepEqual(events, [{ level: "error", stage: "test", outcome: "test" }]);
 });
 
-test("proxyAll logs primary failure and fallback completion with structured context", async () => {
+test("proxyAll alias logs primary failure and fallback completion as upstreamWithFallback", async () => {
   const originalFetch = globalThis.fetch;
   const primaryUrl = "https://primary-proxyall.example.com";
   const fallbackUrl = "https://fallback-proxyall.example.com";
@@ -72,7 +79,7 @@ test("proxyAll logs primary failure and fallback completion with structured cont
         primaryUrl,
         fallbackUrl,
         healthCheckCacheTtl: 0,
-      });
+      }, originContext);
 
       assert.equal(response.status, 200);
       assert.deepEqual(
@@ -82,8 +89,8 @@ test("proxyAll logs primary failure and fallback completion with structured cont
           )
           .map((event) => [event.stage, event.outcome, event.status, event.method, event.originType]),
         [
-          ["origin", "primary_failed", 503, "GET", "proxyAll"],
-          ["origin", "fallback_completed", 200, "GET", "proxyAll"],
+          ["origin", "primary_failed", 503, "GET", "upstreamWithFallback"],
+          ["origin", "fallback_completed", 200, "GET", "upstreamWithFallback"],
         ],
       );
     });
@@ -124,6 +131,7 @@ test("upstreamWithFallback logs primary failure and fallback completion with str
           fallbackUrl,
           healthCheckCacheTtl: 0,
         },
+        originContext,
       );
 
       assert.equal(response.status, 200);
@@ -161,9 +169,9 @@ test("url origin logs structured request failure details", async () => {
         },
       }), {
         url: "https://origin.example.com/orders",
-      });
+      }, originContext);
 
-      assert.equal(response.status, 500);
+      assert.equal(response.status, 502);
       assert.deepEqual(
         logs.error.map((event) => [event.stage, event.outcome, event.method, event.originType]),
         [["origin", "request_failed", "GET", "url"]],
@@ -184,15 +192,13 @@ test("url origin logs structured request failure details", async () => {
 
 test("url origin aborts timed out requests without following redirects", async () => {
   const originalFetch = globalThis.fetch;
-  let redirect: RequestRedirect | undefined;
+  let redirect: RequestInit["redirect"];
   let signal: AbortSignal | undefined;
 
-  globalThis.fetch = (async (
-    _input: RequestInfo | URL,
-    init?: RequestInit,
-  ) => {
-    redirect = init?.redirect;
-    signal = init?.signal;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const request = input as Request;
+    redirect = request.redirect;
+    signal = request.signal;
 
     if (!signal) {
       return new Response(null, { status: 302 });
@@ -215,9 +221,10 @@ test("url origin aborts timed out requests without following redirects", async (
     const response = await url(
       new Request("https://gateway.example.com/orders"),
       { url: "https://origin.example.com/orders", timeout: 5 },
+      originContext,
     );
 
-    assert.equal(response.status, 500);
+    assert.equal(response.status, 504);
     assert.equal(redirect, "manual");
     assert.equal(signal?.aborted, true);
   } finally {
@@ -250,6 +257,7 @@ test("url origin preserves the incoming query string for fixed upstream paths", 
           url: "https://origin.example.com/cookies",
           pathRewrite: "/udemy/v2",
         },
+        originContext,
       );
 
       assert.equal(response.status, 200);
@@ -291,12 +299,62 @@ test("url origin applies pathRewrite when forwarding to a root upstream URL", as
         url: "https://origin.example.com",
         pathRewrite: "/udemy/v2",
       },
+      originContext,
     );
 
     assert.equal(response.status, 200);
     assert.equal(
       capturedUrl,
       "https://origin.example.com/api/public/udemy-base-url?key=abc",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("url origin strips prefixes only at a path segment boundary", async () => {
+  const originalFetch = globalThis.fetch;
+  const capturedUrls: string[] = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    capturedUrls.push((input as Request).url);
+    return new Response("ok", { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const options = { url: "https://origin.example.com", stripPrefix: "/udemy/v3" };
+    await url(new Request("https://gateway.example.com/udemy/v3/a"), options, originContext);
+    await url(new Request("https://gateway.example.com/udemy/v3x/a"), options, originContext);
+
+    assert.deepEqual(capturedUrls, [
+      "https://origin.example.com/a",
+      "https://origin.example.com/",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("url origin rewrites upstream redirects through the gateway", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async () =>
+    new Response(null, {
+      status: 302,
+      headers: { Location: "https://origin.example.com/login?next=1" },
+    })) as typeof fetch;
+
+  try {
+    const response = await url(
+      new Request("https://gateway.example.com/app/orders"),
+      { url: "https://origin.example.com", stripPrefix: "/app" },
+      originContext,
+    );
+
+    assert.equal(response.status, 302);
+    assert.equal(
+      response.headers.get("Location"),
+      "https://gateway.example.com/app/login?next=1",
     );
   } finally {
     globalThis.fetch = originalFetch;

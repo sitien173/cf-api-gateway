@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { executeUnavailableRequest } from "../src/index.ts";
+import { apiKeyOrAuth0 } from "../src/policies/request/index.ts";
 import {
   compileGateway,
   executeGatewayRequest,
@@ -78,7 +79,7 @@ test("compileGateway resolves handlers and rejects unknown policy references", (
   );
 });
 
-test("compileGateway normalizes route methods and rejects unknown methods", () => {
+test("compileGateway accepts configured methods and rejects unknown methods", () => {
   const handlers = {
     requestPolicies: {},
     responsePolicies: {},
@@ -88,7 +89,7 @@ test("compileGateway normalizes route methods and rejects unknown methods", () =
   };
   const route = {
     path: "/health",
-    methods: ["get"],
+    methods: ["GET"],
     origin: "health",
     request: [],
     response: [],
@@ -200,10 +201,7 @@ test("executeGatewayRequest short-circuits when a request policy returns a respo
       log.policyName ?? null,
     ]),
     [
-      ["request_received", "received", "GET", null, null, null],
-      ["route_resolution", "matched", "GET", "/api/test", null, null],
-      ["request_policy", "short_circuit", "GET", "/api/test", 401, "stop"],
-      ["response_finalization", "completed", "GET", "/api/test", 401, null],
+      ["response_finalization", "short_circuit", "GET", "/api/test", 401, "stop"],
     ],
   );
 });
@@ -275,12 +273,6 @@ test("executeGatewayRequest invokes origin and response policies for a matched r
   assert.deepEqual(
     logs.map((log) => [log.stage, log.outcome, log.status ?? null, log.policyName ?? null]),
     [
-      ["request_received", "received", null, null],
-      ["route_resolution", "matched", null, null],
-      ["request_policy", "continued", null, "pass-through"],
-      ["origin", "started", null, null],
-      ["origin", "completed", 200, null],
-      ["response_policy", "applied", 200, "tag"],
       ["response_finalization", "completed", 200, null],
     ],
   );
@@ -339,10 +331,6 @@ test("executeGatewayRequest matches bare prefix routes", async () => {
   assert.deepEqual(
     logs.map((log) => [log.stage, log.outcome, log.routePath ?? null, log.status ?? null]),
     [
-      ["request_received", "received", null, null],
-      ["route_resolution", "matched", "/udemy/v2/api/", null],
-      ["origin", "started", "/udemy/v2/api/", null],
-      ["origin", "completed", "/udemy/v2/api/", 200],
       ["response_finalization", "completed", "/udemy/v2/api/", 200],
     ],
   );
@@ -605,7 +593,15 @@ test("executeGatewayRequest handles CORS preflight without hitting origin", asyn
     {
       requestPolicies: {},
       responsePolicies: {
-        cors: (response: Response, options: { allowedOrigins: string[]; allowedMethods: string[] }) => {
+        cors: (
+          response: Response,
+          options: {
+            allowedOrigins: string[];
+            allowedMethods: string[];
+            allowedHeaders: string[];
+            allowCredentials: boolean;
+          },
+        ) => {
           if (options.allowedOrigins.length > 0) {
             response.headers.set("Access-Control-Allow-Origin", options.allowedOrigins.join(", "));
           }
@@ -665,9 +661,6 @@ test("executeGatewayRequest handles CORS preflight without hitting origin", asyn
   assert.deepEqual(
     logs.map((log) => [log.stage, log.outcome, log.routePath ?? null, log.status ?? null]),
     [
-      ["request_received", "received", null, null],
-      ["route_resolution", "matched", "/udemy/v2/api/", null],
-      ["response_policy", "applied", "/udemy/v2/api/", 204],
       ["response_finalization", "completed", "/udemy/v2/api/", 204]
     ],
   );
@@ -756,26 +749,20 @@ test("executeGatewayRequest finalizes route misses as 404 responses", async () =
   assert.deepEqual(
     logs.map((log) => [log.stage, log.outcome, log.status ?? null]),
     [
-      ["request_received", "received", null],
-      ["route_resolution", "route_miss", 404],
-      ["response_finalization", "completed", 404],
+      ["response_finalization", "route_miss", 404],
     ],
   );
 });
 
-test("unavailable gateway responses include permissive CORS headers", async () => {
-  const { ctx, flush } = createContext();
-  const response = await executeUnavailableRequest(
+test("unavailable gateway responses include permissive CORS headers", () => {
+  const response = executeUnavailableRequest(
     new Request("https://gateway.example.com/unavailable"),
     {
       ANALYTICS_ENABLED: "false",
       GATEWAY_NAME: "test-gateway",
       GATEWAY_CONFIG: {} as KVNamespace,
     },
-    ctx,
   );
-
-  await flush();
 
   assert.equal(response.status, 503);
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), "*");
@@ -786,19 +773,17 @@ test("unavailable gateway responses include permissive CORS headers", async () =
   assert.equal(response.headers.get("Access-Control-Allow-Headers"), "*");
 });
 
-test("configuration resolution failures finalize as 503 with analytics and logs", async () => {
+test("configuration resolution failures finalize as 503 with analytics and logs", () => {
   const analytics: number[] = [];
   const logs: Array<{ stage: string; outcome: string; status?: number }> = [];
-  const { ctx, flush } = createContext();
   const request = new Request("https://gateway.example.com/unavailable", {
     method: "OPTIONS",
     headers: { "access-control-request-method": "GET" },
   });
 
-  const response = await executeUnavailableRequest(
+  const response = executeUnavailableRequest(
     request,
     { ANALYTICS_ENABLED: "true", GATEWAY_NAME: "test-gateway" },
-    ctx,
     {
       logEvent: (event) => {
         logs.push({
@@ -807,24 +792,18 @@ test("configuration resolution failures finalize as 503 with analytics and logs"
           status: event.status,
         });
       },
-      logAnalytics: async (event) => {
+      logAnalytics: (event) => {
         analytics.push(event.status);
       },
     },
   );
-
-  await flush();
 
   assert.equal(response.status, 503);
   assert.deepEqual(analytics, [503]);
   assert.deepEqual(
     logs.map((log) => [log.stage, log.outcome, log.status ?? null]),
     [
-      ["request_received", "received", null],
-      ["route_resolution", "matched", null],
-      ["origin", "started", null],
-      ["origin", "completed", 503],
-      ["response_finalization", "completed", 503],
+      ["response_finalization", "config_unavailable", 503],
     ],
   );
 });
@@ -888,11 +867,97 @@ test("executeGatewayRequest finalizes unexpected failures as 500 responses", asy
   assert.deepEqual(
     logs.map((log) => [log.stage, log.outcome, log.status ?? null]),
     [
-      ["request_received", "received", null],
-      ["route_resolution", "matched", null],
-      ["origin", "started", null],
       ["execution", "failed", 500],
       ["response_finalization", "completed", 500],
     ],
   );
+});
+
+test("short-circuit and error responses carry only the route's CORS headers", async () => {
+  const { ctx } = createContext();
+  const gateway = compileGateway(
+    {
+      origins: { ok: { type: "ok" }, broken: { type: "broken" } },
+      policies: {
+        stop: { type: "stop" },
+        cors: { type: "cors" },
+        tag: { type: "tag" },
+      },
+      routes: [
+        { path: "= /blocked", methods: ["GET"], origin: "ok", request: ["stop"], response: ["cors", "tag"] },
+        { path: "= /broken", methods: ["GET"], origin: "broken", response: ["cors", "tag"] },
+      ],
+    },
+    {
+      requestPolicies: {
+        stop: async () => new Response("blocked", { status: 401 }),
+      },
+      responsePolicies: {
+        cors: (response: Response) => {
+          response.headers.set("Access-Control-Allow-Origin", "https://app.example.com");
+        },
+        tag: (response: Response) => {
+          response.headers.set("x-tag", "applied");
+        },
+      },
+      origins: {
+        ok: async () => new Response("ok"),
+        broken: async () => {
+          throw new Error("origin bug");
+        },
+      },
+    },
+  );
+
+  for (const [path, status] of [["/blocked", 401], ["/broken", 500]] as const) {
+    const response = await executeGatewayRequest(
+      gateway,
+      new Request(`https://gateway.example.com${path}`),
+      {},
+      ctx,
+      { logEvent: () => {} },
+    );
+
+    assert.equal(response.status, status, path);
+    assert.equal(response.headers.get("Access-Control-Allow-Origin"), "https://app.example.com", path);
+    assert.equal(response.headers.get("x-tag"), null, path);
+  }
+});
+
+test("a valid gateway API key never reaches the origin", async () => {
+  const { ctx } = createContext();
+  let originHeaders: Headers | undefined;
+  const gateway = compileGateway(
+    {
+      origins: { orders: { type: "capture" } },
+      policies: { auth: { type: "apiKeyOrAuth0" } },
+      routes: [{ path: "/orders", methods: ["POST"], origin: "orders", request: ["auth"] }],
+    },
+    {
+      requestPolicies: { apiKeyOrAuth0 },
+      responsePolicies: {},
+      origins: {
+        capture: async (request: Request) => {
+          originHeaders = request.headers;
+          return new Response("created", { status: 201 });
+        },
+      },
+    },
+  );
+
+  const response = await executeGatewayRequest(
+    gateway,
+    new Request("https://gateway.example.com/orders", {
+      method: "POST",
+      headers: { "X-API-Key": "valid-key", "x-trace": "abc" },
+      body: "{}",
+    }),
+    { GATEWAY_API_KEY: "valid-key" },
+    ctx,
+    { logEvent: () => {} },
+  );
+
+  assert.equal(response.status, 201);
+  assert.equal(originHeaders?.get("X-API-Key"), null);
+  assert.equal(originHeaders?.get("x-trace"), "abc");
 });

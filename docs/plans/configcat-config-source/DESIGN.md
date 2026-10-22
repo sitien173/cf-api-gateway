@@ -211,8 +211,9 @@ Resolution fails closed if `GATEWAY_NAME` is unset.
 
 `lkg` is written only when all of the following hold:
 
-- The document came from a fresh CDN refresh, not from a value read out of the
-  KV SDK cache or from the bundled fallback.
+- The document came from the `scheduled` handler's CDN refresh, not from a
+  request-path read, the KV SDK cache, or the bundled fallback.
+- The raw document differs from the one already stored in `lkg`.
 - Schema validation and `compileGateway` both succeeded.
 - The ConfigCat config timestamp on the new document is newer than the
   timestamp stored alongside the existing `lkg` value.
@@ -222,8 +223,14 @@ The stored value is an envelope carrying the raw document and that timestamp.
 Provenance qualification is what prevents last-known-good regression. Without
 it, a delayed isolate that read an older config from the SDK's KV cache can
 overwrite a newer `lkg`, and that rollback then persists into every future cold
-start. It also means cold isolates never write `lkg` at all, which removes the
-write-amplification concern that an earlier draft of this design accepted.
+start.
+
+Correction, B-002: provenance alone did not remove write amplification. A 304
+Not Modified response still gives the SDK a new fetch timestamp, which is the
+first line of the serialized cache value, so every warm refresh rewrote both
+the `cc:` cache key and `lkg`. The KV cache adapter now compares the serialized
+value without that first line, and `lkg` skips byte-identical documents. Only
+the `scheduled` handler writes KV; the request path reads it.
 
 ### Validation split
 
@@ -359,13 +366,12 @@ staleness predates this change and is resolved incidentally.
   pointing a route at the wrong upstream.
 - Refresh fan-out. One refresh per isolate per minute means traffic spread
   across many isolates produces proportional load on the ConfigCat CDN, with
-  rate limiting a possible result. Jitter on the refresh window spreads the
-  load. If refresh volume proves material in practice, the mitigation is to
-  centralize refreshes in a scheduled worker and have request isolates read
-  only from KV. That is deliberately not built now.
+  rate limiting a possible result. B-002 centralized refreshes in a one-minute
+  Cron Trigger; request isolates read `lkg` from KV and reach the CDN only on
+  a cold start with no valid `lkg`.
 - Under very low traffic, most isolates are cold and serve whatever KV holds.
   Staleness stays bounded near 60 seconds plus KV eventual consistency, because
-  background refreshes write fresh config back to KV for the next cold isolate.
+  the scheduled refresh writes fresh config to KV for the next cold isolate.
 
 ## Open items
 

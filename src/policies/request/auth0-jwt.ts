@@ -1,6 +1,8 @@
 import * as jose from "jose";
+import { constantTimeEqual } from "../../helpers/compare";
 import { ErrorResponse } from "../../helpers/response";
-import { IRequest, RequestPolicyEnv, TRequestPolicyHandler } from "../../types";
+import { TRequestPolicyHandler } from "../../types";
+import { closed } from "../../config/schema-helpers";
 
 type RemoteJwkSet = ReturnType<typeof jose.createRemoteJWKSet>;
 
@@ -12,21 +14,8 @@ type NormalizedIssuer = {
 const remoteJwkSets = new Map<string, RemoteJwkSet>();
 const apiKeyCache = new Map<string, string[]>();
 
-export const constantTimeEqual = (left: string, right: string): boolean => {
-  const leftBytes = new TextEncoder().encode(left);
-  const rightBytes = new TextEncoder().encode(right);
-  const length = Math.max(leftBytes.length, rightBytes.length);
-  let difference = leftBytes.length ^ rightBytes.length;
-
-  for (let index = 0; index < length; index += 1) {
-    difference |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
-  }
-
-  return difference === 0;
-};
-
-const getValidApiKeys = (raw: unknown): string[] => {
-  if (typeof raw !== "string") {
+const getValidApiKeys = (raw: string | undefined): string[] => {
+  if (raw === undefined) {
     return [];
   }
 
@@ -81,9 +70,9 @@ const getRemoteJwkSet = (jwksUrl: string): RemoteJwkSet => {
 };
 
 export const apiKeyOrAuth0: TRequestPolicyHandler = async (
-  request: IRequest,
-  _options: unknown,
-  env: RequestPolicyEnv,
+  request,
+  _options,
+  env,
 ) => {
   const apiKey = request.headers.get("X-API-Key");
   if (apiKey !== null) {
@@ -91,7 +80,10 @@ export const apiKeyOrAuth0: TRequestPolicyHandler = async (
     const validApiKeys = getValidApiKeys(env.GATEWAY_API_KEY);
 
     if (validApiKeys.some((validApiKey) => constantTimeEqual(validApiKey, presentedApiKey))) {
-      return request;
+      // The key is valid on every gateway route, so origins must not receive it.
+      const forwarded = new Request(request);
+      forwarded.headers.delete("X-API-Key");
+      return forwarded;
     }
 
     return new ErrorResponse("API key is invalid", 401);
@@ -116,20 +108,19 @@ export const apiKeyOrAuth0: TRequestPolicyHandler = async (
   }
 
   try {
-    const verificationResult = await jose.jwtVerify(
+    await jose.jwtVerify(
       bearerMatch[1],
       getRemoteJwkSet(normalizedIssuer.jwksUrl),
       {
         issuer: normalizedIssuer.issuer,
         audience: auth0Audience,
+        algorithms: ["RS256", "PS256"],
       },
     );
-
-    if (typeof verificationResult.payload.sub === "string") {
-      request.user = verificationResult.payload.sub;
-    }
     return request;
   } catch {
     return new ErrorResponse("JWT verification failed", 401);
   }
 };
+
+apiKeyOrAuth0.optionsSchema = closed({});

@@ -8,28 +8,29 @@ All CI gates in `.github/workflows/ci.yml` pass locally: `npm run lint`, `npm ru
 
 ## Adding an origin or policy type
 
-A new type is wired in three places, and missing any one makes every document using it fail validation or compilation:
+A new type is wired in two places, and missing either makes every document using it fail validation or compilation:
 
-1. Handler file in `src/origins/`, `src/policies/request/`, or `src/policies/response/`.
-2. Named export in that folder's `index.ts`. The export name is the `type` string used in the configuration document.
-3. `types()` and `conditional()` in `src/config/schema.ts`. The schema is closed, so every option needs an entry.
+1. Handler file in `src/origins/`, `src/policies/request/`, or `src/policies/response/`. Set `handler.optionsSchema` with `closed()` from `src/config/schema-helpers.ts`; a handler without one accepts no options.
+2. Named export in that folder's `index.ts`. The export name is the `type` string used in the configuration document. `src/config/schema.ts` derives its type enums and option checks from these exports.
 
-A policy handler may expose `compile(options)`. The compiler calls it for each route that references the policy; throw there to reject a bad document before it is adopted.
+A policy handler may set `handler.compile(options)`. The compiler calls it once per defined policy; throw there to reject a bad document before it is adopted.
 
 ## Invariants
 
 - Origin handlers return a newly constructed `Response`. Response policies mutate `response.headers`, which throws on a fetched response.
-- A request policy that returns a `Response` ends the pipeline; response policies do not run on it.
-- The compiler requires an `apiKeyOrAuth0` request policy on every write method unless the route sets `"auth": "none"`. Keep that rule intact when editing `src/gateway/compiler.ts`.
+- Origin handlers pass background work to `ctx.waitUntil`. The runtime may cancel any other unawaited promise when the invocation ends.
+- A request policy that returns a `Response` ends the pipeline; only `cors`-type response policies run on it.
+- The compiler requires an `apiKeyOrAuth0` or `basicAuth` request policy on every route that reaches a write method, directly or through `changeMethod`, unless the route sets `"auth": "none"`. That policy must run before `jsonBodyValidation` and `changeMethod`. Keep both rules intact when editing `src/gateway/compiler.ts`.
 - Compilation and candidate adoption are all-or-nothing. A rejected document never replaces the active gateway.
+- The `scheduled` handler is the only KV writer. The request path reads configuration and never writes it, so a gateway without its cron trigger keeps serving the stored document.
 - Per-isolate state lives in module-scope maps and in the `createGatewayResolver` closure: health results, JWKS sets, schema validators, the compiled gateway. Code must stay correct when that state is cold or stale.
-- New log output goes through `emitGatewayLog` as a structured event with `level`, `stage`, and `outcome`.
+- New log output goes through `emitGatewayLog` as a structured event with `level`, `stage`, and `outcome`. Origins log through `ctx.log` and request policies through their `log` argument, which add route context and apply `GATEWAY_LOG_LEVEL`.
 - Secrets come from Worker secrets or `.dev.vars`. Keep them out of `wrangler.toml`, `src/config.json`, and ConfigCat.
 
 ## Tests
 
 - `node:test` with `node:assert/strict`, run by `tsx`. Import sources with the `.ts` extension. One file per area under `test/`.
-- Control time, randomness, logging, analytics, and the ConfigCat client through the injected dependencies: `now`, `random`, `logEvent`, `logAnalytics`, `getClient`, `finalCandidate`. Origin tests replace `globalThis.fetch`.
+- Control time, logging, analytics, and the ConfigCat client through the injected dependencies: `now`, `logEvent`, `logAnalytics`, `getClient`, `finalCandidate`. Origin tests replace `globalThis.fetch`.
 - `test/config-schema.test.ts` uses `src/config.json` as its fixture and indexes origins by name. Editing `src/config.json` can break it.
 
 ## Generated and ignored files

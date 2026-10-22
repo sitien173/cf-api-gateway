@@ -1,9 +1,11 @@
 import type { IConfigCatCache } from "@configcat/sdk";
 
-export type GatewayConfigEnv = {
-  GATEWAY_NAME?: string;
-  GATEWAY_CONFIG: KVNamespace;
-};
+import { emitGatewayLog } from "../gateway/logging";
+import type { GatewayEnv, GatewayLogger } from "../gateway/types";
+import { errorMessage } from "../helpers/errors";
+
+export type GatewayConfigEnv = Pick<GatewayEnv, "GATEWAY_NAME"> &
+  Required<Pick<GatewayEnv, "GATEWAY_CONFIG">>;
 
 export type LkgEnvelope = {
   version: 1;
@@ -29,46 +31,69 @@ export const getConfigCatCacheKey = (
 export const getLkgKey = (env: GatewayNameEnv): string =>
   `lkg:${requireGatewayName(env)}:gateway_config`;
 
-const logKvError = (operation: string, error: unknown): void => {
-  console.error(`[config] KV ${operation} failed`, error);
+const logKvError = (
+  log: GatewayLogger | undefined,
+  operation: "read" | "write",
+  error: unknown,
+): void => {
+  emitGatewayLog(log, {
+    level: "error",
+    stage: "config_resolution",
+    outcome: `kv_${operation}_failed`,
+    reason: errorMessage(error),
+  });
 };
 
-export class GatewayConfigCatCache implements IConfigCatCache {
-  private readonly lastWritten = new Map<string, string>();
+// The SDK serializes as "<timestamp>\n<etag>\n<config>" and refreshes the
+// timestamp on every 304, so comparisons ignore the first line.
+const withoutTimestamp = (value: string): string =>
+  value.slice(value.indexOf("\n") + 1);
 
-  constructor(private readonly env: GatewayConfigEnv) {}
+export class GatewayConfigCatCache implements IConfigCatCache {
+  private readonly lastStored = new Map<string, string>();
+
+  constructor(
+    private readonly env: GatewayConfigEnv,
+    private readonly log?: GatewayLogger,
+  ) {}
 
   async get(key: string): Promise<string | null | undefined> {
     const scopedKey = getConfigCatCacheKey(this.env, key);
 
     try {
-      return await this.env.GATEWAY_CONFIG.get(scopedKey, { cacheTtl: 60 });
+      const value = await this.env.GATEWAY_CONFIG.get(scopedKey, { cacheTtl: 60 });
+      if (value != null) {
+        this.lastStored.set(scopedKey, withoutTimestamp(value));
+      }
+      return value;
     } catch (error) {
-      logKvError("read", error);
+      logKvError(this.log, "read", error);
       return null;
     }
   }
 
   async set(key: string, value: string): Promise<void> {
     const scopedKey = getConfigCatCacheKey(this.env, key);
-    if (this.lastWritten.get(scopedKey) === value) {
+    const body = withoutTimestamp(value);
+    if (this.lastStored.get(scopedKey) === body) {
       return;
     }
 
     try {
       await this.env.GATEWAY_CONFIG.put(scopedKey, value);
-      this.lastWritten.set(scopedKey, value);
+      this.lastStored.set(scopedKey, body);
     } catch (error) {
-      logKvError("write", error);
+      logKvError(this.log, "write", error);
     }
   }
 }
 
 export const createConfigCatCache = (
   env: GatewayConfigEnv,
-): IConfigCatCache => new GatewayConfigCatCache(env);
+  log?: GatewayLogger,
+): IConfigCatCache => new GatewayConfigCatCache(env, log);
 
-const asEnvelope = (stored: string): LkgEnvelope => {
+const asEnvelope = (stored: string): LkgEnvelope | null => {
   try {
     const parsed: unknown = JSON.parse(stored);
     if (
@@ -82,10 +107,10 @@ const asEnvelope = (stored: string): LkgEnvelope => {
       return parsed as LkgEnvelope;
     }
   } catch {
-    // Treat corrupt values as legacy raw documents.
+    // Corrupt values are treated as missing.
   }
 
-  return { version: 1, raw: stored, timestamp: 0 };
+  return null;
 };
 
 const toTimestamp = (value: Date | number | undefined): number | undefined => {
@@ -99,6 +124,7 @@ const toTimestamp = (value: Date | number | undefined): number | undefined => {
 
 export const readLkg = async (
   env: GatewayConfigEnv,
+  log?: GatewayLogger,
 ): Promise<LkgEnvelope | null> => {
   const key = getLkgKey(env);
 
@@ -106,7 +132,7 @@ export const readLkg = async (
     const stored = await env.GATEWAY_CONFIG.get(key, { cacheTtl: 60 });
     return stored == null ? null : asEnvelope(stored);
   } catch (error) {
-    logKvError("read", error);
+    logKvError(log, "read", error);
     return null;
   }
 };
@@ -115,6 +141,7 @@ export const writeLkg = async (
   env: GatewayConfigEnv,
   raw: string,
   configTimestamp: Date | number | undefined,
+  log?: GatewayLogger,
 ): Promise<boolean> => {
   const key = getLkgKey(env);
   const timestamp = toTimestamp(configTimestamp);
@@ -125,7 +152,8 @@ export const writeLkg = async (
   try {
     // This read-then-write is not atomic; concurrent writers may race, and the newer timestamp guard is accepted here.
     const stored = await env.GATEWAY_CONFIG.get(key);
-    if (stored != null && asEnvelope(stored).timestamp >= timestamp) {
+    const envelope = stored == null ? null : asEnvelope(stored);
+    if (envelope && (envelope.raw === raw || envelope.timestamp >= timestamp)) {
       return false;
     }
 
@@ -135,7 +163,7 @@ export const writeLkg = async (
     );
     return true;
   } catch (error) {
-    logKvError("write", error);
+    logKvError(log, "write", error);
     return false;
   }
 };

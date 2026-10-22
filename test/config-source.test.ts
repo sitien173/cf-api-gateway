@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { IConfigCatClient } from "@configcat/sdk";
 
 import {
   createGatewayResolver,
   type ResolveGatewayDependencies,
 } from "../src/config/source.ts";
+import { getLkgKey } from "../src/config/kv.ts";
 
 const validRaw = JSON.stringify({
   origins: { public: { type: "url", options: { url: "https://origin.test" } } },
@@ -111,317 +113,298 @@ const resolverDependencies = (
   client: ReturnType<typeof createClient>,
   overrides: Partial<ResolveGatewayDependencies> = {},
 ): ResolveGatewayDependencies => ({
-  getClient: () => client,
+  getClient: () => client as unknown as IConfigCatClient,
   now: () => 1000,
-  random: () => 0,
   ...overrides,
 });
 
-test("serves a warm compiled gateway without performing I/O", async () => {
+const storeLkg = (kv: FakeKv, raw: string, timestamp = 100) => {
+  kv.values.set(
+    getLkgKey({ GATEWAY_NAME: "gateway-a" }),
+    JSON.stringify({ version: 1, raw, timestamp }),
+  );
+};
+
+const adoptedSources = (logs: Array<{ outcome: string; configSource?: string }>) =>
+  logs
+    .filter((event) => event.outcome === "candidate_adopted")
+    .map((event) => event.configSource);
+
+test("cold request adopts a valid lkg without contacting ConfigCat or writing KV", async () => {
   const kv = createKv();
-  const env = createEnv(kv);
-  const context = createContext();
-  const client = createClient(validRaw);
-  let now = 1000;
-  const dependencies = resolverDependencies(client, { now: () => now });
+  storeLkg(kv, validRaw);
+  const client = createClient(refreshedRaw);
+  const logs: Array<{ outcome: string; configSource?: string }> = [];
   const resolver = createGatewayResolver();
 
-  const first = await resolver.resolve(env, context.ctx, handlers, dependencies);
-  now = 2000;
-  const second = await resolver.resolve(env, context.ctx, handlers, dependencies);
+  const gateway = await resolver.resolve(
+    createEnv(kv),
+    createContext().ctx,
+    handlers,
+    resolverDependencies(client, { logEvent: (event) => logs.push(event) }),
+  );
+
+  assert.ok(gateway);
+  assert.deepEqual(adoptedSources(logs), ["lkg"]);
+  assert.equal(client.forceRefreshCalls, 0);
+  assert.equal(client.detailsCalls, 0);
+  assert.equal(kv.putCalls, 0);
+});
+
+test("warm requests inside the refresh interval perform no I/O", async () => {
+  const kv = createKv();
+  storeLkg(kv, validRaw);
+  const context = createContext();
+  let now = 1000;
+  const dependencies = resolverDependencies(createClient(undefined), { now: () => now });
+  const resolver = createGatewayResolver();
+
+  const first = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+  const getCalls = kv.getCalls;
+  now = 60_999;
+  const second = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
 
   assert.ok(first);
   assert.strictEqual(second, first);
-  assert.equal(client.detailsCalls, 1);
-  assert.equal(client.forceRefreshCalls, 0);
-  assert.equal(kv.getCalls, 0);
-  assert.equal(kv.putCalls, 0);
+  assert.equal(kv.getCalls, getCalls);
   assert.equal(context.pending.length, 0);
 });
 
-test("falls through a malformed ConfigCat value to a valid lkg", async () => {
+test("warm refresh reads lkg in the background and adopts a changed document", async () => {
   const kv = createKv();
-  kv.values.set(
-    "lkg:gateway-a:gateway_config",
-    JSON.stringify({ version: 1, raw: validRaw, timestamp: 100 }),
-  );
-  const client = createClient("not-json");
-  const adopted: string[] = [];
-  const resolver = createGatewayResolver();
-
-  const result = await resolver.resolve(
-    createEnv(kv),
-    createContext().ctx,
-    handlers,
-    resolverDependencies(client, {
-      logEvent: (event) => {
-        if (event.outcome === "candidate_adopted" && event.configSource) {
-          adopted.push(event.configSource);
-        }
-      },
-    }),
-  );
-
-  assert.ok(result);
-  assert.deepEqual(adopted, ["lkg"]);
-  assert.equal(client.forceRefreshCalls, 0);
-  assert.equal(kv.putCalls, 0);
-});
-
-test("falls through a corrupt lkg to one inline refresh and writes fresh lkg", async () => {
-  const kv = createKv();
-  kv.values.set("lkg:gateway-a:gateway_config", "{corrupt");
-  const client = createClient(undefined);
-  client.setForceRefresh(async () => {
-    client.setValue(validRaw);
-    return { isSuccess: true };
-  });
-  const adopted: string[] = [];
-  const resolver = createGatewayResolver();
+  storeLkg(kv, validRaw);
   const context = createContext();
+  let now = 1000;
+  const logs: Array<{ outcome: string; configSource?: string }> = [];
+  const dependencies = resolverDependencies(createClient(undefined), {
+    now: () => now,
+    logEvent: (event) => logs.push(event),
+  });
+  const resolver = createGatewayResolver();
 
-  const result = await resolver.resolve(
-    createEnv(kv),
-    context.ctx,
-    handlers,
-    resolverDependencies(client, {
-      logEvent: (event) => {
-        if (event.outcome === "candidate_adopted" && event.configSource) {
-          adopted.push(event.configSource);
-        }
-      },
-    }),
-  );
+  const first = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+  storeLkg(kv, refreshedRaw, 200);
+  now = 61_000;
+  const stale = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+  const sameInterval = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
 
-  assert.ok(result);
-  assert.deepEqual(adopted, ["inline-refresh"]);
-  assert.equal(client.forceRefreshCalls, 1);
+  assert.strictEqual(stale, first);
+  assert.strictEqual(sameInterval, first);
   assert.equal(context.pending.length, 1);
+
   await context.flush();
-  assert.equal(kv.putCalls, 1);
-});
+  const refreshed = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
 
-test("concurrent cold requests share one candidate ladder and refresh", async () => {
-  const kv = createKv();
-  const client = createClient(undefined);
-  let releaseRefresh!: () => void;
-  const refreshReleased = new Promise<void>((resolve) => {
-    releaseRefresh = resolve;
-  });
-  client.setForceRefresh(async () => {
-    await refreshReleased;
-    client.setValue(validRaw);
-    return { isSuccess: true };
-  });
-  const resolver = createGatewayResolver();
-  const context = createContext();
-  const adoptions: string[] = [];
-  const dependencies = resolverDependencies(client, {
-    logEvent: (event) => {
-      if (event.outcome === "candidate_adopted" && event.configSource) {
-        adoptions.push(event.configSource);
-      }
-    },
-  });
-  let firstSettled = false;
-  const first = resolver
-    .resolve(createEnv(kv), context.ctx, handlers, dependencies)
-    .then((result) => {
-      firstSettled = true;
-      return result;
-    });
-  for (let index = 0; index < 6; index += 1) {
-    await Promise.resolve();
-  }
-  const second = resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
-
-  assert.equal(client.forceRefreshCalls, 1);
-  assert.equal(firstSettled, false);
-  assert.equal(adoptions.length, 0);
-  releaseRefresh();
-  const [firstResult, secondResult] = await Promise.all([first, second]);
-
-  assert.ok(firstResult);
-  assert.strictEqual(secondResult, firstResult);
-  assert.deepEqual(adoptions, ["inline-refresh"]);
-});
-
-test("single-flight warm refresh preserves the compiled gateway until adoption", async () => {
-  const kv = createKv();
-  const client = createClient(validRaw);
-  let releaseRefresh!: () => void;
-  const refreshReleased = new Promise<void>((resolve) => {
-    releaseRefresh = resolve;
-  });
-  client.setForceRefresh(async () => {
-    await refreshReleased;
-    client.setValue(refreshedRaw);
-    return { isSuccess: true };
-  });
-  let now = 1000;
-  const context = createContext();
-  const adopted: string[] = [];
-  const dependencies = resolverDependencies(client, {
-    now: () => now,
-    logEvent: (event) => {
-      if (event.outcome === "candidate_adopted" && event.configSource) {
-        adopted.push(event.configSource);
-      }
-    },
-  });
-  const resolver = createGatewayResolver();
-  const initial = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
-
-  now = 61000;
-  const refreshing = resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
-  const whileRefreshing = await resolver.resolve(
-    createEnv(kv),
-    context.ctx,
-    handlers,
-    dependencies,
-  );
-
-  assert.strictEqual(whileRefreshing, initial);
-  assert.equal(client.forceRefreshCalls, 1);
-  assert.deepEqual(adopted, ["configcat"]);
-  releaseRefresh();
-  await refreshing;
-  await context.flush();
-
-  assert.equal(client.forceRefreshCalls, 1);
-  assert.deepEqual(adopted, ["configcat", "inline-refresh"]);
-});
-
-test("failed background refresh uses a five-second retry window", async () => {
-  const kv = createKv();
-  const client = createClient(validRaw);
-  client.setForceRefresh(async () => ({ isSuccess: false }));
-  let now = 1000;
-  const context = createContext();
-  const dependencies = resolverDependencies(client, { now: () => now });
-  const resolver = createGatewayResolver();
-
-  await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
-  now = 61000;
-  await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
-  await context.flush();
-  assert.equal(client.forceRefreshCalls, 1);
-
-  now = 65999;
-  await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
-  assert.equal(client.forceRefreshCalls, 1);
-  now = 66001;
-  await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
-  await context.flush();
-  assert.equal(client.forceRefreshCalls, 2);
-});
-
-test("does not write lkg for a KV or bundled candidate", async () => {
-  const kv = createKv();
-  kv.values.set(
-    "lkg:gateway-a:gateway_config",
-    JSON.stringify({ version: 1, raw: validRaw, timestamp: 100 }),
-  );
-  const client = createClient(undefined);
-  const resolver = createGatewayResolver();
-  const result = await resolver.resolve(
-    createEnv(kv),
-    createContext().ctx,
-    handlers,
-    resolverDependencies(client, { finalCandidate: JSON.parse(validRaw) }),
-  );
-
-  assert.ok(result);
+  assert.ok(refreshed);
+  assert.notStrictEqual(refreshed, first);
+  assert.deepEqual(adoptedSources(logs), ["lkg", "lkg"]);
   assert.equal(kv.putCalls, 0);
 });
 
-test("does not write lkg when the bundled candidate is adopted", async () => {
+test("warm refresh keeps the compiled gateway when lkg is unchanged", async () => {
   const kv = createKv();
-  const client = createClient(undefined);
-  const adopted: string[] = [];
+  storeLkg(kv, validRaw);
+  const context = createContext();
+  let now = 1000;
+  const logs: Array<{ outcome: string; configSource?: string }> = [];
+  const dependencies = resolverDependencies(createClient(undefined), {
+    now: () => now,
+    logEvent: (event) => logs.push(event),
+  });
   const resolver = createGatewayResolver();
-  const result = await resolver.resolve(
+
+  const first = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+  now = 61_000;
+  await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+  await context.flush();
+  const second = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
+
+  assert.strictEqual(second, first);
+  assert.deepEqual(adoptedSources(logs), ["lkg"]);
+});
+
+test("cold request falls through a corrupt lkg to one inline refresh without writing lkg", async () => {
+  const kv = createKv();
+  kv.values.set(getLkgKey({ GATEWAY_NAME: "gateway-a" }), "{not-json");
+  const client = createClient(validRaw);
+  const logs: Array<{ outcome: string; configSource?: string }> = [];
+  const resolver = createGatewayResolver();
+
+  const gateway = await resolver.resolve(
     createEnv(kv),
     createContext().ctx,
     handlers,
-    resolverDependencies(client, {
+    resolverDependencies(client, { logEvent: (event) => logs.push(event) }),
+  );
+
+  assert.ok(gateway);
+  assert.deepEqual(adoptedSources(logs), ["inline-refresh"]);
+  assert.equal(client.forceRefreshCalls, 1);
+  assert.equal(kv.putCalls, 0);
+});
+
+test("cold request adopts the bundled candidate when lkg and ConfigCat fail", async () => {
+  const kv = createKv();
+  const logs: Array<{ outcome: string; configSource?: string }> = [];
+  const resolver = createGatewayResolver();
+
+  const gateway = await resolver.resolve(
+    createEnv(kv),
+    createContext().ctx,
+    handlers,
+    resolverDependencies(createClient(undefined), {
       finalCandidate: JSON.parse(validRaw),
-      logEvent: (event) => {
-        if (event.outcome === "candidate_adopted" && event.configSource) {
-          adopted.push(event.configSource);
-        }
-      },
+      logEvent: (event) => logs.push(event),
     }),
   );
 
-  assert.ok(result);
-  assert.deepEqual(adopted, ["bundled"]);
+  assert.ok(gateway);
+  assert.deepEqual(adoptedSources(logs), ["bundled"]);
   assert.equal(kv.putCalls, 0);
 });
 
-test("returns undefined when every candidate fails and backs off retries", async () => {
+test("concurrent cold requests share one candidate ladder", async () => {
   const kv = createKv();
-  const client = createClient("not-json");
-  client.setForceRefresh(async () => ({ isSuccess: false }));
-  const resolver = createGatewayResolver();
-  let now = 1000;
-  const dependencies = resolverDependencies(client, {
-    now: () => now,
-    finalCandidate: "also-not-json",
-  });
+  const client = createClient(validRaw);
   const context = createContext();
+  const dependencies = resolverDependencies(client);
+  const resolver = createGatewayResolver();
 
-  const firstResult = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
-  assert.equal(firstResult, undefined);
+  const [first, second] = await Promise.all([
+    resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies),
+    resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies),
+  ]);
+
+  assert.ok(first);
+  assert.strictEqual(second, first);
+  assert.equal(kv.getCalls, 1);
   assert.equal(client.forceRefreshCalls, 1);
+});
+
+test("returns undefined when every candidate fails and backs off retries for five seconds", async () => {
+  const kv = createKv();
+  let now = 1000;
+  const dependencies = resolverDependencies(createClient(undefined), { now: () => now });
+  const resolver = createGatewayResolver();
+
+  assert.equal(await resolver.resolve(createEnv(kv), createContext().ctx, handlers, dependencies), undefined);
+  const getCalls = kv.getCalls;
 
   now = 5999;
-  const withinWindow = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
-  assert.equal(withinWindow, undefined);
-  assert.equal(client.forceRefreshCalls, 1);
+  assert.equal(await resolver.resolve(createEnv(kv), createContext().ctx, handlers, dependencies), undefined);
+  assert.equal(kv.getCalls, getCalls);
 
-  now = 6001;
-  const afterWindow = await resolver.resolve(createEnv(kv), context.ctx, handlers, dependencies);
-  assert.equal(afterWindow, undefined);
-  assert.equal(client.forceRefreshCalls, 2);
+  now = 6000;
+  storeLkg(kv, validRaw);
+  assert.ok(await resolver.resolve(createEnv(kv), createContext().ctx, handlers, dependencies));
+  assert.equal(kv.getCalls, getCalls + 1);
 });
 
 test("logs the adopted candidate and a deterministic document hash", async () => {
-  const client = createClient(validRaw);
+  const kv = createKv();
+  storeLkg(kv, validRaw);
   const logs: Array<{ source?: string; hash?: string }> = [];
   const resolver = createGatewayResolver();
 
   await resolver.resolve(
-    createEnv(createKv()),
+    createEnv(kv),
     createContext().ctx,
     handlers,
-    resolverDependencies(client, {
-      logEvent: (event) => logs.push({ source: event.configSource, hash: event.configHash }),
+    resolverDependencies(createClient(undefined), {
+      logEvent: (event) => {
+        if (event.outcome === "candidate_adopted") {
+          logs.push({ source: event.configSource, hash: event.configHash });
+        }
+      },
     }),
   );
 
   assert.equal(logs.length, 1);
-  assert.equal(logs[0].source, "configcat");
+  assert.equal(logs[0].source, "lkg");
   assert.match(logs[0].hash ?? "", /^[0-9a-f]+$/);
 });
 
-test("jitter stays within the configured refresh bounds", async () => {
+test("scheduled refresh adopts a ConfigCat document and stores it as lkg", async () => {
+  const kv = createKv();
   const client = createClient(validRaw);
-  let now = 1000;
-  const random = 1;
   const resolver = createGatewayResolver();
-  const context = createContext();
-  const dependencies = resolverDependencies(client, {
-    now: () => now,
-    random: () => random,
-  });
+  const dependencies = resolverDependencies(client);
 
-  await resolver.resolve(createEnv(createKv()), context.ctx, handlers, dependencies);
-  now = 75999;
-  await resolver.resolve(createEnv(createKv()), context.ctx, handlers, dependencies);
-  assert.equal(client.forceRefreshCalls, 0);
-  now = 76000;
-  await resolver.resolve(createEnv(createKv()), context.ctx, handlers, dependencies);
-  await context.flush();
+  assert.equal(await resolver.refresh(createEnv(kv), handlers, dependencies), true);
+  const gateway = await resolver.resolve(createEnv(kv), createContext().ctx, handlers, dependencies);
+
+  assert.ok(gateway);
   assert.equal(client.forceRefreshCalls, 1);
+  assert.equal(kv.putCalls, 1);
+  assert.deepEqual(JSON.parse(kv.values.get(getLkgKey({ GATEWAY_NAME: "gateway-a" }))!), {
+    version: 1,
+    raw: validRaw,
+    timestamp: 100,
+  });
+});
+
+test("scheduled refresh with an unchanged document neither recompiles nor writes", async () => {
+  const kv = createKv();
+  const client = createClient(validRaw);
+  const logs: Array<{ outcome: string; configSource?: string }> = [];
+  const resolver = createGatewayResolver();
+  const dependencies = resolverDependencies(client, { logEvent: (event) => logs.push(event) });
+
+  await resolver.refresh(createEnv(kv), handlers, dependencies);
+  assert.equal(await resolver.refresh(createEnv(kv), handlers, dependencies), true);
+
+  assert.deepEqual(adoptedSources(logs), ["configcat"]);
+  assert.equal(kv.putCalls, 1);
+});
+
+test("scheduled refresh stores lkg for a document first adopted from inline refresh", async () => {
+  const kv = createKv();
+  const client = createClient(validRaw);
+  const resolver = createGatewayResolver();
+  const dependencies = resolverDependencies(client);
+
+  await resolver.resolve(createEnv(kv), createContext().ctx, handlers, dependencies);
+  assert.equal(kv.putCalls, 0);
+  await resolver.refresh(createEnv(kv), handlers, dependencies);
+
+  assert.equal(kv.putCalls, 1);
+});
+
+test("scheduled refresh rejects an invalid document and keeps the active gateway", async () => {
+  const kv = createKv();
+  const client = createClient(validRaw);
+  const resolver = createGatewayResolver();
+  const dependencies = resolverDependencies(client);
+
+  await resolver.refresh(createEnv(kv), handlers, dependencies);
+  const active = await resolver.resolve(createEnv(kv), createContext().ctx, handlers, dependencies);
+  client.setValue("{not-json");
+
+  assert.equal(await resolver.refresh(createEnv(kv), handlers, dependencies), false);
+  assert.strictEqual(
+    await resolver.resolve(createEnv(kv), createContext().ctx, handlers, dependencies),
+    active,
+  );
+  assert.equal(kv.putCalls, 1);
+});
+
+test("scheduled refresh logs a ConfigCat failure without adopting or writing", async () => {
+  const kv = createKv();
+  const client = createClient(validRaw);
+  client.setForceRefresh(async () => ({ isSuccess: false }));
+  const logs: Array<{ outcome: string; configSource?: string }> = [];
+  const resolver = createGatewayResolver();
+
+  const refreshed = await resolver.refresh(
+    createEnv(kv),
+    handlers,
+    resolverDependencies(client, { logEvent: (event) => logs.push(event) }),
+  );
+
+  assert.equal(refreshed, false);
+  assert.deepEqual(
+    logs.map((event) => [event.outcome, event.configSource]),
+    [["candidate_rejected", "configcat"]],
+  );
+  assert.equal(kv.putCalls, 0);
 });

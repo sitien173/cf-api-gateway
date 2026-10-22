@@ -50,7 +50,7 @@ test("cors response policy rejects insecure wildcard origins", () => {
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), null);
 });
 
-test("cors response policy preserves wildcard localhost development origins", () => {
+test("cors response policy does not match wildcard entries for plain http localhost origins", () => {
   const cases = [
     { allowedOrigin: "*.localhost", origin: "http://localhost" },
     { allowedOrigin: "*.127.0.0.1", origin: "http://127.0.0.1" },
@@ -73,6 +73,6 @@ test("cors response policy preserves wildcard localhost development origins", ()
       request,
     );
 
-    assert.equal(response.headers.get("Access-Control-Allow-Origin"), origin);
+    assert.equal(response.headers.get("Access-Control-Allow-Origin"), null);
   }
 });

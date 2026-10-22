@@ -1,117 +1,45 @@
 import { Validator } from "@cfworker/json-schema";
 import type { OutputUnit, Schema } from "@cfworker/json-schema";
 import type { GatewayConfig } from "../gateway/types";
-const closed = (
-  properties: Record<string, Schema>,
-  required: string[] = [],
-): Schema => ({
-  type: "object",
-  properties,
-  required,
-  additionalProperties: false,
-});
-const stringArray: Schema = { type: "array", items: { type: "string" } };
-const urlOptions = closed(
-  {
-    url: { type: "string" },
-    pathRewrite: { type: "string" },
-    timeout: { type: "number" },
-  },
-  ["url"],
-);
-const failoverOptions = closed(
-  {
-    primaryUrl: { type: "string" },
-    fallbackUrl: { type: "string" },
-    stripPrefix: { type: "string" },
-    healthCheckPath: { type: "string" },
-    healthCheckTimeout: { type: "number" },
-    healthCheckCacheTtl: { type: "number" },
-  },
-  ["primaryUrl", "fallbackUrl"],
-);
-const corsOptions = closed(
-  {
-    allowedOrigins: stringArray,
-    allowedMethods: stringArray,
-    allowedHeaders: stringArray,
-    exposedHeaders: stringArray,
-    maxAge: { type: "number" },
-    allowCredentials: { type: "boolean" },
-  },
-  ["allowedOrigins", "allowedMethods", "allowedHeaders", "allowCredentials"],
-);
-const types = (kind: "origin" | "policy"): string[] =>
-  kind === "origin"
-    ? ["url", "proxyAll", "upstreamWithFallback"]
-    : [
-        "cors",
-        "apiKeyOrAuth0",
-        "basicAuth",
-        "changeMethod",
-        "jsonBodyValidation",
-        "addHeaders",
-      ];
-const conditional = (kind: "origin" | "policy"): Schema[] => {
-  const opts: Record<string, Schema> =
-    kind === "origin"
-      ? {
-          url: urlOptions,
-          proxyAll: failoverOptions,
-          upstreamWithFallback: failoverOptions,
-        }
-      : {
-          cors: corsOptions,
-          apiKeyOrAuth0: closed({}),
-          basicAuth: closed(
-            { username: { type: "string" }, password: { type: "string" } },
-            ["username", "password"],
-          ),
-          changeMethod: closed({ method: { type: "string" } }, ["method"]),
-          jsonBodyValidation: closed({ schema: { type: "object" } }, [
-            "schema",
-          ]),
-          addHeaders: closed(
-            {
-              headers: {
-                type: "object",
-                additionalProperties: { type: "string" },
-              },
-            },
-            ["headers"],
-          ),
-        };
-  return Object.entries(opts).map(([type, options]) => ({
+import type { HandlerMetadata } from "../types";
+import * as origins from "../origins";
+import * as requestPolicies from "../policies/request";
+import * as responsePolicies from "../policies/response";
+import { closed, httpMethods, stringArray } from "./schema-helpers";
+const policies: Record<string, HandlerMetadata<never>> = {
+  ...requestPolicies,
+  ...responsePolicies,
+};
+// Each handler's optionsSchema closes its options; options are required when that schema requires a field.
+const conditional = (handlers: Record<string, HandlerMetadata<never>>): Schema[] =>
+  Object.entries(handlers).map(([type, { optionsSchema = closed({}) }]) => ({
     if: { properties: { type: { const: type } } },
     then: {
-      properties: { options },
-      ...(kind === "policy" && type === "apiKeyOrAuth0"
-        ? {}
-        : { required: ["options"] }),
+      properties: { options: optionsSchema },
+      ...(optionsSchema.required?.length ? { required: ["options"] } : {}),
     },
   }));
-};
 const originSchema: Schema = {
   ...closed(
     {
-      type: { type: "string", enum: types("origin") },
+      type: { type: "string", enum: Object.keys(origins) },
       options: { type: "object" },
       description: { type: "string" },
     },
     ["type", "options"],
   ),
-  allOf: conditional("origin"),
+  allOf: conditional(origins),
 };
 const policySchema: Schema = {
   ...closed(
     {
-      type: { type: "string", enum: types("policy") },
+      type: { type: "string", enum: Object.keys(policies) },
       options: { type: "object" },
       description: { type: "string" },
     },
     ["type"],
   ),
-  allOf: conditional("policy"),
+  allOf: conditional(policies),
 };
 const keyMap = (values: Schema): Schema => ({
   type: "object",
@@ -134,18 +62,7 @@ export const gatewayConfigSchema: Schema = closed(
             type: "array",
             minItems: 1,
             uniqueItems: true,
-            items: {
-              type: "string",
-              enum: [
-                "GET",
-                "HEAD",
-                "POST",
-                "PUT",
-                "PATCH",
-                "DELETE",
-                "OPTIONS",
-              ],
-            },
+            items: { type: "string", enum: httpMethods },
           },
           origin: { type: "string" },
           request: stringArray,
@@ -159,6 +76,7 @@ export const gatewayConfigSchema: Schema = closed(
   },
   ["origins", "policies", "routes"],
 );
+const validator = new Validator(gatewayConfigSchema);
 export type GatewayConfigValidationResult =
   | { valid: true; config: GatewayConfig }
   | { valid: false; errors: OutputUnit[] };
@@ -173,7 +91,7 @@ export const validateGatewayConfig = (
   value: unknown,
 ): GatewayConfigValidationResult => {
   try {
-    const result = new Validator(gatewayConfigSchema).validate(value);
+    const result = validator.validate(value);
     if (!result.valid) return { valid: false, errors: result.errors };
     return { valid: true, config: value as GatewayConfig };
   } catch (error) {

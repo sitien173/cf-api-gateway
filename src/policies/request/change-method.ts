@@ -1,32 +1,32 @@
-import { IRequest, IRequestInit, TRequestPolicyHandler } from "../../types";
+import { TRequestPolicyHandler } from "../../types";
+import { closed } from "../../config/schema-helpers";
 
 type ChangeMethodOptions = {
   method: string;
 };
 
 export const changeMethod: TRequestPolicyHandler<ChangeMethodOptions> = (
-  request: IRequest,
+  request: Request,
   options: ChangeMethodOptions
 ) => {
-  const initRequest: IRequestInit = {
+  const headers = new Headers(request.headers);
+  const initRequest: RequestInit = {
     method: options.method,
-    headers: new Headers(request.headers),
+    headers,
     body: request.body,
     cf: request.cf,
     fetcher: request.fetcher,
     redirect: request.redirect,
     signal: request.signal,
-    user: request.user,
   };
 
   if (options.method === "GET" || options.method === "HEAD") {
     initRequest.body = null;
-    initRequest.headers.delete("Content-Type");
-    initRequest.headers.delete("Content-Length");
+    headers.delete("Content-Type");
+    headers.delete("Content-Length");
   }
 
-  const newRequest = new Request(request.url, initRequest) as IRequest;
-  newRequest.user = request.user;
-
-  return Promise.resolve(newRequest);
+  return Promise.resolve(new Request(request.url, initRequest));
 };
+
+changeMethod.optionsSchema = closed({ method: { type: "string" } }, ["method"]);

@@ -1,4 +1,5 @@
 import { TResponsePolicyHandler } from "../../types";
+import { closed, stringArray } from "../../config/schema-helpers";
 
 type CorsOptions = {
   allowedOrigins: string[];
@@ -34,26 +35,18 @@ const findAllowedOrigin = (
   }
 
   const requestHostname = requestUrl.hostname.toLowerCase();
-  const isDevelopmentOrigin =
-    requestOrigin === "http://localhost" || requestOrigin === "http://127.0.0.1";
 
   for (const allowedOrigin of allowedOrigins) {
     if (!allowedOrigin.startsWith("*.")) {
       continue;
     }
 
-    if (requestUrl.protocol !== "https:" && !isDevelopmentOrigin) {
+    if (requestUrl.protocol !== "https:") {
       continue;
     }
 
     const suffix = allowedOrigin.slice(2).toLowerCase();
-    const matchesDevelopmentOrigin =
-      (requestOrigin === "http://localhost" && suffix === "localhost") ||
-      (requestOrigin === "http://127.0.0.1" && suffix === "127.0.0.1");
-    const matchesWildcardHost =
-      requestHostname !== suffix && requestHostname.endsWith(`.${suffix}`);
-
-    if (matchesDevelopmentOrigin || matchesWildcardHost) {
+    if (requestHostname !== suffix && requestHostname.endsWith(`.${suffix}`)) {
       return requestOrigin;
     }
   }
@@ -120,4 +113,22 @@ export const cors: TResponsePolicyHandler<CorsOptions> = (
   }
 
   return response;
+};
+
+cors.optionsSchema = closed(
+  {
+    allowedOrigins: stringArray,
+    allowedMethods: stringArray,
+    allowedHeaders: stringArray,
+    exposedHeaders: stringArray,
+    maxAge: { type: "number" },
+    allowCredentials: { type: "boolean" },
+  },
+  ["allowedOrigins", "allowedMethods", "allowedHeaders", "allowCredentials"],
+);
+
+cors.compile = (options) => {
+  if (options.allowCredentials && options.allowedOrigins.includes("*")) {
+    throw new Error("CORS cannot combine wildcard allowed origins with credentials");
+  }
 };

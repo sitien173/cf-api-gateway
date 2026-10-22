@@ -1,8 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
-import { createRequire } from "node:module";
-import { Readable } from "node:stream";
 import * as jose from "jose";
 
 import { compileGateway, executeGatewayRequest } from "../src/gateway/index.ts";
@@ -11,8 +8,6 @@ import { apiKeyOrAuth0 } from "../src/policies/request/auth0-jwt.ts";
 
 const issuer = "https://tenant.example.com/";
 const audience = "https://api.example.com";
-const nodeRequire = createRequire(import.meta.url);
-const https = nodeRequire("https") as typeof import("node:https");
 
 const createTokenFixture = async (tokenIssuer = issuer) => {
   const { privateKey, publicKey } = await jose.generateKeyPair("RS256");
@@ -35,34 +30,27 @@ const createTokenFixture = async (tokenIssuer = issuer) => {
 const createContext = () => ({
   waitUntil() {},
   passThroughOnException() {},
-} as ExecutionContext);
+}) as unknown as ExecutionContext;
 
 const withMockedJwks = async <T>(
   jwks: { keys: jose.JWK[] },
   run: (resolverCalls: () => number) => Promise<T>,
 ): Promise<T> => {
-  const originalGet = https.get;
+  const originalFetch = globalThis.fetch;
   let resolverCalls = 0;
-  https.get = (() => {
+  globalThis.fetch = (async () => {
     resolverCalls += 1;
-    const request = new EventEmitter() as import("node:http").ClientRequest;
-    request.destroy = () => request;
-    setImmediate(() => {
-      const response = Readable.from([Buffer.from(JSON.stringify(jwks))]) as import("node:http").IncomingMessage;
-      response.statusCode = 200;
-      request.emit("response", response);
-    });
-    return request;
-  }) as typeof https.get;
+    return Response.json(jwks);
+  }) as typeof fetch;
 
   try {
     return await run(() => resolverCalls);
   } finally {
-    https.get = originalGet;
+    globalThis.fetch = originalFetch;
   }
 };
 
-test("apiKeyOrAuth0 accepts a trimmed API key without Auth0 configuration", async () => {
+test("apiKeyOrAuth0 accepts a trimmed API key without Auth0 configuration and strips it", async () => {
   const request = new Request("https://gateway.example.com/orders", {
     headers: { "X-API-Key": "  valid-key  " },
   });
@@ -73,7 +61,9 @@ test("apiKeyOrAuth0 accepts a trimmed API key without Auth0 configuration", asyn
     { GATEWAY_API_KEY: " , valid-key,another-key " },
   );
 
-  assert.equal(response, request);
+  assert.ok(response instanceof Request);
+  assert.equal(response.url, request.url);
+  assert.equal(response.headers.get("X-API-Key"), null);
 });
 
 test("apiKeyOrAuth0 rejects an invalid API key without falling back to JWT", async () => {
@@ -96,7 +86,7 @@ test("apiKeyOrAuth0 rejects an invalid API key without falling back to JWT", asy
       },
     );
 
-    assert.equal(response.status, 401);
+    assert.equal((response as Response).status, 401);
     assert.equal(resolverCalls(), 0);
   });
 });
@@ -110,7 +100,7 @@ test("apiKeyOrAuth0 returns 500 when Auth0 bindings are missing", async () => {
     {},
   );
 
-  assert.equal(response.status, 500);
+  assert.equal((response as Response).status, 500);
 });
 
 test("apiKeyOrAuth0 rejects HTTP issuer configuration", async () => {
@@ -122,7 +112,7 @@ test("apiKeyOrAuth0 rejects HTTP issuer configuration", async () => {
     { AUTH0_ISSUER: "http://tenant.example.com/", AUTH0_AUDIENCE: audience },
   );
 
-  assert.equal(response.status, 500);
+  assert.equal((response as Response).status, 500);
 });
 
 test("apiKeyOrAuth0 returns 401 for missing and invalid bearer tokens", async () => {
@@ -137,8 +127,8 @@ test("apiKeyOrAuth0 returns 401 for missing and invalid bearer tokens", async ()
     env,
   );
 
-  assert.equal(missing.status, 401);
-  assert.equal(invalid.status, 401);
+  assert.equal((missing as Response).status, 401);
+  assert.equal((invalid as Response).status, 401);
 });
 
 test("apiKeyOrAuth0 normalizes issuers with several trailing slashes", async () => {
@@ -184,7 +174,6 @@ test("apiKeyOrAuth0 caches JWK resolvers by normalized JWKS URL", async () => {
 
     assert.equal(first instanceof Request, true);
     assert.equal(second instanceof Request, true);
-    assert.equal((first as Request & { user?: string }).user, "user-123");
     assert.equal(resolverCalls(), 1);
   });
 });

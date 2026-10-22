@@ -5,13 +5,15 @@ import type {
 } from "../types";
 
 export type GatewayEnv = {
+  GATEWAY_CONFIG?: KVNamespace;
+  GATEWAY_NAME?: string;
+  CONFIGCAT_SDK_KEY?: string;
+  GATEWAY_API_KEY?: string;
   AUTH0_ISSUER?: string;
   AUTH0_AUDIENCE?: string;
-  GATEWAY_NAME?: string;
   ANALYTICS_ENABLED?: string;
   API_ANALYTICS?: AnalyticsEngineDataset;
   GATEWAY_LOG_LEVEL?: string;
-  [key: string]: unknown;
 };
 
 export type OriginConfig = {
@@ -50,12 +52,14 @@ export type GatewayHandlers = {
 
 export type CompiledRequestPolicy = {
   name: string;
+  type: string;
   options?: unknown;
   handler: TRequestPolicyHandler;
 };
 
 export type CompiledResponsePolicy = {
   name: string;
+  type: string;
   options?: unknown;
   handler: TResponsePolicyHandler;
 };
@@ -80,6 +84,8 @@ export type CompiledRoute = {
 
 export type CompiledGateway = {
   routes: CompiledRoute[];
+  // Same routes and order as routes, grouped by method for lookup.
+  routesByMethod: Map<string, CompiledRoute[]>;
 };
 
 export type AnalyticsEvent = {
@@ -92,7 +98,7 @@ export type AnalyticsEvent = {
 export type AnalyticsLogger = (
   event: AnalyticsEvent,
   env: GatewayEnv,
-) => Promise<void>;
+) => void;
 
 export type GatewayLogLevel = "info" | "error";
 

@@ -2,6 +2,8 @@ import type {
   TRequestPolicyHandler,
   TResponsePolicyHandler,
 } from "../types";
+import { httpMethods } from "../config/schema-helpers";
+import { errorMessage } from "../helpers/errors";
 import type {
   CompiledGateway,
   CompiledRequestPolicy,
@@ -14,15 +16,9 @@ import type {
 } from "./types";
 
 const publicMethods = new Set(["GET", "HEAD", "OPTIONS"]);
-const knownMethods = new Set([
-  "GET",
-  "HEAD",
-  "POST",
-  "PUT",
-  "PATCH",
-  "DELETE",
-  "OPTIONS",
-]);
+const knownMethods = new Set(httpMethods);
+const gatewayAuthTypes = new Set(["apiKeyOrAuth0", "basicAuth"]);
+const bodyPolicyTypes = new Set(["jsonBodyValidation", "changeMethod"]);
 
 export const parseRoutePath = (
   path: string,
@@ -43,6 +39,7 @@ export const parseRoutePath = (
 const resolvePolicies = <
   TPolicy extends {
     name: string;
+    type: string;
     options?: unknown;
     handler: TRequestPolicyHandler | TResponsePolicyHandler;
   },
@@ -65,29 +62,23 @@ const resolvePolicies = <
       );
     }
 
-    const compilableHandler = handler as
-      | (TRequestPolicyHandler & { compile?: (options: unknown) => void })
-      | (TResponsePolicyHandler & { compile?: (options: unknown) => void });
-    compilableHandler.compile?.(definition.options);
-
     return {
       name,
+      type: definition.type,
       options: definition.options,
       handler,
     } as TPolicy;
   });
 
-const assertCorsPolicies = (config: GatewayConfig): void => {
+// Each defined policy compiles once, whether or not a route references it.
+const compilePolicies = (config: GatewayConfig, handlers: GatewayHandlers): void => {
   for (const [name, policy] of Object.entries(config.policies)) {
-    if (
-      policy.type === "cors" &&
-      policy.options?.allowCredentials === true &&
-      Array.isArray(policy.options.allowedOrigins) &&
-      policy.options.allowedOrigins.includes("*")
-    ) {
-      throw new Error(
-        `CORS policy ${name} cannot combine wildcard allowed origins with credentials`,
-      );
+    const handler =
+      handlers.requestPolicies[policy.type] ?? handlers.responsePolicies[policy.type];
+    try {
+      handler?.compile?.(policy.options);
+    } catch (error) {
+      throw Object.assign(new Error(`Policy ${name}: ${errorMessage(error)}`), { cause: error });
     }
   }
 };
@@ -101,13 +92,12 @@ const duplicateKey = (matchMode: RouteMatchMode, pattern: string, path: string):
 
 const compileRouteMethod = (
   route: GatewayConfig["routes"][number],
-  configuredMethod: string,
+  method: string,
   config: GatewayConfig,
   handlers: GatewayHandlers,
   seenRoutes: Set<string>,
   order: number,
 ): CompiledRoute => {
-  const method = configuredMethod.toUpperCase();
   const routeLabel = `Route ${method} ${route.path}: `;
   if (!knownMethods.has(method)) {
     throw new Error(`${routeLabel}Unknown HTTP method ${method}`);
@@ -127,7 +117,7 @@ const compileRouteMethod = (
     parsedPath = parseRoutePath(route.path);
   } catch (error) {
     throw Object.assign(
-      new Error(`${routeLabel}invalid regex ${error instanceof Error ? error.message : String(error)}`),
+      new Error(`${routeLabel}invalid regex ${errorMessage(error)}`),
       { cause: error },
     );
   }
@@ -154,12 +144,27 @@ const compileRouteMethod = (
 
   // GET, HEAD, and OPTIONS routes are auth-optional by design; all other methods require gateway auth
   // unless the route sets auth "none" because the origin enforces its own auth.
-  const requiresAuth = !publicMethods.has(method) && route.auth !== "none";
-  const hasGatewayAuthPolicy = requestNames.some(
-    (name) => config.policies[name]?.type === "apiKeyOrAuth0",
-  );
-  if (requiresAuth && !hasGatewayAuthPolicy) {
-    throw new Error(`${routeLabel}must use an apiKeyOrAuth0 policy`);
+  // A changeMethod policy can turn a public route into a write, so its target counts too.
+  const requestTypes = requestNames.map((name) => config.policies[name].type);
+  const targetMethods = [
+    method,
+    ...requestNames
+      .filter((name) => config.policies[name].type === "changeMethod")
+      .map((name) => String(config.policies[name].options?.method).toUpperCase()),
+  ];
+  const requiresAuth =
+    route.auth !== "none" && targetMethods.some((target) => !publicMethods.has(target));
+  if (requiresAuth) {
+    const authIndex = requestTypes.findIndex((type) => gatewayAuthTypes.has(type));
+    if (authIndex === -1) {
+      throw new Error(`${routeLabel}must use an apiKeyOrAuth0 or basicAuth policy`);
+    }
+    const bodyIndex = requestTypes.findIndex((type) => bodyPolicyTypes.has(type));
+    if (bodyIndex !== -1 && authIndex > bodyIndex) {
+      throw new Error(
+        `${routeLabel}must run its auth policy before jsonBodyValidation and changeMethod`,
+      );
+    }
   }
 
   return {
@@ -221,20 +226,25 @@ export const compileGateway = (
   config: GatewayConfig,
   handlers: GatewayHandlers,
 ): CompiledGateway => {
-  assertCorsPolicies(config);
+  compilePolicies(config, handlers);
 
   const routes: CompiledRoute[] = [];
   const seenRoutes = new Set<string>();
 
   for (const [order, route] of config.routes.entries()) {
-    for (const configuredMethod of route.methods) {
-      routes.push(
-        compileRouteMethod(route, configuredMethod, config, handlers, seenRoutes, order),
-      );
+    for (const method of route.methods) {
+      routes.push(compileRouteMethod(route, method, config, handlers, seenRoutes, order));
     }
   }
 
   routes.sort(compareRoutes);
 
-  return { routes };
+  const routesByMethod = new Map<string, CompiledRoute[]>();
+  for (const route of routes) {
+    const methodRoutes = routesByMethod.get(route.method) ?? [];
+    methodRoutes.push(route);
+    routesByMethod.set(route.method, methodRoutes);
+  }
+
+  return { routes, routesByMethod };
 };

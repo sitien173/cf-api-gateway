@@ -58,31 +58,34 @@ This README describes the behaviour of version `0.4.8` as implemented in `src/`.
 1. Resolve the compiled gateway from the configuration source. If no candidate is valid, respond `503` with the text body `Gateway configuration unavailable` and permissive CORS headers.
 2. If the request is `OPTIONS` with an `Access-Control-Request-Method` header, treat it as a CORS preflight: find the route for the requested method, run only its response policies on an empty `204`, and return. Request policies and the origin are skipped.
 3. Find the first route whose method and path match. If none matches, respond `404` with `{"message":"Route not found"}`.
-4. Run the route's request policies in order. A policy either passes a request on or returns a response. A returned response ends the pipeline immediately, and response policies do not run on it, so an auth failure carries no CORS headers.
+4. Run the route's request policies in order. A policy either passes a request on or returns a response. A returned response ends the pipeline: only the route's `cors` response policies run on it, so a browser can read an auth failure.
 5. Call the route's origin handler.
 6. Run the route's response policies in order on the origin response.
-7. Write an analytics data point through `ctx.waitUntil` and emit a `response_finalization` log event.
+7. Write an analytics data point and emit the request's single `response_finalization` log event.
 
-An exception anywhere in steps 2 to 6 produces `500` with `{"message":"An error occured."}`.
+An exception anywhere in steps 2 to 6 produces `500` with `{"message":"An error occured."}`. When a route was matched, its `cors` response policies run on the `500`.
 
 ## Configuration source
 
 `src/config/source.ts` resolves the routing document. State lives per Worker isolate.
 
-On a cold isolate, candidates are tried in this order. Each candidate must parse, pass the schema in `src/config/schema.ts`, and compile in `src/gateway/compiler.ts` before it is adopted:
+A Cron Trigger polls ConfigCat. The `scheduled` handler runs every minute: it forces a ConfigCat fetch, and when the raw document differs from the current one, it validates and compiles it, then writes it to the last-known-good key. It skips the write when the stored copy is identical or has an equal or newer ConfigCat fetch time. A malformed dashboard edit is rejected and logged, and the stored document stays in place. The scheduled handler is the only code that writes KV.
+
+**Every deployment must declare the cron trigger.** `wrangler.toml` sets `crons = ["* * * * *"]`. Gateways deployed by Steels Portal must emit the same trigger in their generated Wrangler configuration. Without it, no code polls ConfigCat and each gateway keeps serving the last document in KV.
+
+The request path only reads. On a cold isolate, candidates are tried in this order. Each candidate must parse, pass the schema in `src/config/schema.ts`, and compile in `src/gateway/compiler.ts` before it is adopted:
 
 | Order | Candidate | Source |
 |---|---|---|
-| 1 | `configcat` | ConfigCat setting `gateway_config`, served from the SDK cache stored in KV |
-| 2 | `lkg` | Last-known-good document at KV key `lkg:<GATEWAY_NAME>:gateway_config` |
-| 3 | `inline-refresh` | Forced ConfigCat CDN fetch |
-| 4 | `bundled` | `src/config.json` compiled into the Worker |
+| 1 | `lkg` | Last-known-good document at KV key `lkg:<GATEWAY_NAME>:gateway_config` |
+| 2 | `inline-refresh` | Forced ConfigCat CDN fetch, tried only when the `lkg` document is missing or invalid. The result is not written to KV. |
+| 3 | `bundled` | `src/config.json` compiled into the Worker |
 
-On a warm isolate, the current compiled gateway is served with no I/O. After 60 seconds plus up to 15 seconds of jitter, the next request triggers one background CDN refresh through `ctx.waitUntil`. A failed refresh keeps the current gateway and retries after 5 seconds. Only one refresh runs per isolate at a time.
+Concurrent cold requests share one resolution. After a cold failure, the isolate waits 5 seconds before trying again.
 
-A document adopted from the `inline-refresh` candidate is written back to the last-known-good key, unless the stored copy has an equal or newer ConfigCat fetch time. A malformed dashboard edit is rejected and logged, and the previous gateway stays active.
+On a warm isolate, the current compiled gateway is served with no I/O. Every 60 seconds, the next request reads the last-known-good key in the background through `ctx.waitUntil` and adopts it when the raw document changed.
 
-The ConfigCat setting must be a Text setting holding the whole JSON document. The SDK runs in manual-poll mode with a 5 second request timeout. Its cache entries use KV keys of the form `cc:<GATEWAY_NAME>:<sdk-cache-key>`. Both key families are scoped by `GATEWAY_NAME`, so several gateways can share one KV namespace.
+The ConfigCat setting must be a Text setting holding the whole JSON document. The SDK runs in manual-poll mode with a 5 second request timeout. A `304 Not Modified` answer does not rewrite the cache. Its cache entries use KV keys of the form `cc:<GATEWAY_NAME>:<sdk-cache-key>`. Both key families are scoped by `GATEWAY_NAME`, so several gateways can share one KV namespace.
 
 Each adoption emits a log event with `outcome: "candidate_adopted"`, the `configSource`, and a `configHash` of the raw document. Use it to confirm which candidate a deployment is serving.
 
@@ -97,7 +100,7 @@ The document has three required top-level keys. The schema is closed: an unknown
   "origins": {
     "udemy-v3": {
       "type": "url",
-      "options": { "url": "https://udemy.tienngodev.io.vn", "pathRewrite": "/udemy/v3" }
+      "options": { "url": "https://udemy.tienngodev.io.vn", "stripPrefix": "/udemy/v3" }
     }
   },
   "policies": {
@@ -144,8 +147,9 @@ Compilation is all-or-nothing. Beyond the schema, the compiler rejects a documen
 
 - a route references an unknown origin or policy key;
 - a policy listed under `request` is not a request policy type, or one listed under `response` is not a response policy type;
-- a route method other than `GET`, `HEAD`, or `OPTIONS` lacks a request policy of type `apiKeyOrAuth0` and does not set `"auth": "none"`. Use `"auth": "none"` only when the origin enforces its own authentication;
-- a `cors` policy combines `"*"` in `allowedOrigins` with `"allowCredentials": true`.
+- a route that does not set `"auth": "none"` can send a method other than `GET`, `HEAD`, or `OPTIONS` and lacks a request policy of type `apiKeyOrAuth0` or `basicAuth`. A `changeMethod` target counts as a method the route sends. Use `"auth": "none"` only when the origin enforces its own authentication;
+- such a route runs its auth policy after a `jsonBodyValidation` or `changeMethod` policy;
+- a policy's `compile` step rejects its options, for example a `cors` policy that combines `"*"` in `allowedOrigins` with `"allowCredentials": true`.
 
 ## Origin types
 
@@ -158,16 +162,17 @@ Forwards the request to a single URL.
 | Option | Required | Default | Meaning |
 |---|---|---|---|
 | `url` | yes | | Target URL. |
-| `pathRewrite` | no | | Request path prefix to replace with the target URL. |
-| `timeout` | no | `5000` | Request timeout in milliseconds. |
+| `stripPrefix` | no | | Request path prefix to replace with the target URL. |
+| `pathRewrite` | no | | Deprecated alias for `stripPrefix`. A document may not set both. |
+| `timeout` | no | `5000` | Time to wait for response headers, in milliseconds. |
 
-When the request path starts with `pathRewrite` and the target URL path is `/`, the rest of the request path is appended to the target. With `"pathRewrite": "/udemy/v3"`, a request to `/udemy/v3/api/x` goes to `https://udemy.tienngodev.io.vn/api/x`. With `"pathRewrite": "/"`, the full request path is forwarded. Without `pathRewrite`, or when the target URL has a non-root path, every request goes to the target URL path as written. The query string is always copied.
+When the request path starts with `stripPrefix` at a path segment boundary and the target URL path is `/`, the rest of the request path is appended to the target. With `"stripPrefix": "/udemy/v3"`, a request to `/udemy/v3/api/x` goes to `https://udemy.tienngodev.io.vn/api/x`, while `/udemy/v3x/api/x` does not match. With `"stripPrefix": "/"`, the full request path is forwarded. Without a prefix, or when the target URL has a non-root path, every request goes to the target URL path as written. The query string is always copied.
 
-A network failure or timeout returns `500` with `{"message":"Origin request failed"}`.
+A `Location` header pointing at the target host is rewritten to the gateway origin, with the prefix restored. A network failure returns `502` with `{"message":"Origin request failed"}`. A timeout returns `504` with `{"message":"Origin request timed out"}`.
 
-### `proxyAll` and `upstreamWithFallback`
+### `upstreamWithFallback`
 
-Both types run the same failover handler in `src/origins/failover.ts`. Route matching is determined only by the route's `path`; `proxyAll` has no implicit prefix behavior.
+Runs the failover handler in `src/origins/failover.ts`. `proxyAll` is a deprecated alias for this type; its log events report `upstreamWithFallback`. Route matching is determined only by the route's `path`.
 
 | Option | Required | Default | Meaning |
 |---|---|---|---|
@@ -176,15 +181,16 @@ Both types run the same failover handler in `src/origins/failover.ts`. Route mat
 | `stripPrefix` | no | | Prefix removed from the request path before forwarding. |
 | `healthCheckPath` | no | `/api/health` | Path appended to `primaryUrl` for the health check. |
 | `healthCheckTimeout` | no | `5000` | Health check timeout in milliseconds. |
+| `timeout` | no | `5000` | Time to wait for upstream response headers, in milliseconds. A timeout counts as a network failure. |
 | `healthCheckCacheTtl` | no | `60000` | Health result cache lifetime in milliseconds. |
 
 Behaviour:
 
-- The primary is healthy when `GET <primaryUrl><healthCheckPath>` returns a 2xx status within the timeout. The result is cached per isolate. A stale result is served while one refresh runs in the background.
+- The primary is healthy when `GET <primaryUrl><healthCheckPath>` returns a 2xx status within the timeout. The result is cached per isolate. A stale result is served while one refresh runs in the background through `ctx.waitUntil`. A refresh still pending after twice `healthCheckTimeout` is replaced.
 - A healthy primary receives the request first. An unhealthy primary is skipped and the fallback receives it.
 - For `GET` and `HEAD` only, a network error or a 5xx status from the primary triggers one retry against the fallback.
 - For other methods, the request body is streamed and never retried. A primary 5xx is returned to the client unchanged.
-- When no upstream produces a response, the gateway returns `503` with `{"message":"All upstreams failed"}`.
+- When no upstream produces a response, the gateway returns `{"message":"All upstreams failed"}` with `504` if the last attempt timed out and `502` otherwise.
 - A `Location` header pointing at the primary or fallback host is rewritten to the gateway origin, with `stripPrefix` restored.
 
 ## Policy types
@@ -196,16 +202,16 @@ Policy handlers live in `src/policies/request/` and `src/policies/response/`.
 | Type | Options | Behaviour |
 |---|---|---|
 | `apiKeyOrAuth0` | none | Accepts an `X-API-Key` header that matches any value in `GATEWAY_API_KEY`. Without that header, verifies an `Authorization: Bearer <jwt>` token against the JWKS of `AUTH0_ISSUER` with audience `AUTH0_AUDIENCE`. |
-| `basicAuth` | `username`, `password` | Requires `Authorization: Basic <base64(username:password)>`. The credentials are stored in the configuration document. |
-| `jsonBodyValidation` | `schema` | Parses the body as JSON and validates it against the JSON Schema. Responds `400` on failure. |
+| `basicAuth` | `secret` | Requires `Authorization: Basic <base64(user:password)>`. `secret` names a Worker secret, matching `^[A-Z][A-Z0-9_]*$`, that holds `user:password`. Credentials are UTF-8 encoded before base64. A missing secret returns `500` with `{"message":"Basic auth configuration is missing"}`. |
+| `jsonBodyValidation` | `schema`, optional `maxBytes` | Parses the body as JSON and validates it against the JSON Schema. Responds `400` on failure. A body larger than `maxBytes`, default `1048576`, responds `413`. |
 | `changeMethod` | `method` | Replaces the request method. Switching to `GET` or `HEAD` drops the body and the `Content-Type` and `Content-Length` headers. |
 
 `apiKeyOrAuth0` details:
 
 - `GATEWAY_API_KEY` holds one key or a comma-separated list. Comparison is constant-time.
-- A present but wrong `X-API-Key` returns `401` without trying the JWT.
+- A present but wrong `X-API-Key` returns `401` without trying the JWT. A valid key is removed from the request before it reaches the origin.
 - `AUTH0_ISSUER` must be an `https` URL. Missing or invalid Auth0 settings return `500` with `{"message":"Auth0 configuration is missing"}`.
-- A missing header, a non-bearer header, or a failed verification returns `401`.
+- A missing header, a non-bearer header, or a failed verification returns `401`. Only `RS256` and `PS256` tokens are accepted.
 
 ### Response policies
 
@@ -218,7 +224,7 @@ Policy handlers live in `src/policies/request/` and `src/policies/response/`.
 
 - `"*"` in `allowedOrigins` returns `Access-Control-Allow-Origin: *`. Otherwise the request `Origin` is echoed only when it matches an entry, and `Vary: Origin` is appended.
 - An entry such as `*.udemy.com` matches any `https` subdomain of `udemy.com`, but not `udemy.com` itself.
-- `*.localhost` and `*.127.0.0.1` also match `http://localhost` and `http://127.0.0.1`.
+- Wildcard entries never match plain `http` origins. List local development origins exactly, for example `http://localhost:3000`.
 - With `allowCredentials: true` and `allowedHeaders: ["*"]`, the request's `Access-Control-Request-Headers` value is echoed.
 
 ## Bindings, variables, and secrets
@@ -242,12 +248,16 @@ Set secrets with `npx wrangler secret put <NAME>`. Keep them out of `wrangler.to
 | Status | Body | Cause |
 |---|---|---|
 | `400` | JSON `message` | `jsonBodyValidation` rejected the body. |
+| `413` | `{"message":"Request body is too large"}` | The body exceeded `jsonBodyValidation` `maxBytes`. |
 | `401` | JSON `message` | `apiKeyOrAuth0` or `basicAuth` rejected the request. |
 | `404` | `{"message":"Route not found"}` | No route matched the method and path. |
 | `500` | `{"message":"An error occured."}` | Unhandled exception in the pipeline. |
-| `500` | `{"message":"Origin request failed"}` | A `url` origin failed or timed out. |
 | `500` | `{"message":"Auth0 configuration is missing"}` | Auth0 secrets are missing or invalid. |
-| `503` | `{"message":"All upstreams failed"}` | A failover origin got no response from any upstream. |
+| `500` | `{"message":"Basic auth configuration is missing"}` | The Worker secret named by `basicAuth` is missing. |
+| `502` | `{"message":"Origin request failed"}` | A `url` origin request failed. |
+| `502` | `{"message":"All upstreams failed"}` | A failover origin got no response from any upstream. |
+| `504` | `{"message":"Origin request timed out"}` | A `url` origin did not send response headers within `timeout`. |
+| `504` | `{"message":"All upstreams failed"}` | The last failover attempt timed out. |
 | `503` | `Gateway configuration unavailable` as text | No configuration candidate was valid. |
 
 ## Observability
@@ -255,6 +265,8 @@ Set secrets with `npx wrangler secret put <NAME>`. Keep them out of `wrangler.to
 ### Logs
 
 Pipeline code emits structured events through `emitGatewayLog` in `src/gateway/logging.ts`, written with `console.info` or `console.error`. Each event has `level`, `stage`, and `outcome`, plus context such as `method`, `routePath`, `originType`, `policyName`, `status`, `latencyMs`, `configSource`, `configHash`, and `reason`. `wrangler.toml` enables Workers Logs and traces with persistence.
+
+Each request emits one `info` event at stage `response_finalization`. Its `outcome` is `completed`, `short_circuit` with the `policyName` that ended the pipeline, `route_miss`, or `config_unavailable`. Errors and failover routing changes add their own events. Set `GATEWAY_LOG_LEVEL="error"` to drop the `info` events.
 
 Stream live logs:
 
@@ -264,7 +276,7 @@ npx wrangler tail --format pretty
 
 ### Analytics
 
-When `API_ANALYTICS`, `GATEWAY_NAME`, and `ANALYTICS_ENABLED="true"` are all set, each response writes one data point:
+When `API_ANALYTICS`, `GATEWAY_NAME`, and `ANALYTICS_ENABLED="true"` are all set, each response writes one data point. Analytics are silent when `ANALYTICS_ENABLED` is not `"true"`. A missing binding is logged once per isolate.
 
 | Field | Value |
 |---|---|
@@ -303,7 +315,7 @@ Example SQL API queries are in `analytics-sql-expressions/`. Replace the table p
 
 ```
 src/
-  index.ts              Worker entry point and 503 fallback
+  index.ts              Worker entry point, scheduled refresh, and 503 fallback
   config.json           Bundled final-fallback routing document
   config/
     schema.ts           JSON Schema for the routing document
@@ -314,7 +326,7 @@ src/
     runtime.ts          Per-request pipeline
     logging.ts          Structured log events
     types.ts            Config, compiled gateway, and log types
-  origins/              url, proxyAll, upstreamWithFallback, shared failover
+  origins/              url, upstreamWithFallback, shared forwarder and failover
   policies/request/     apiKeyOrAuth0, basicAuth, jsonBodyValidation, changeMethod
   policies/response/    cors, addHeaders
   services/analytics.ts Analytics Engine writer

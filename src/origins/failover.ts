@@ -1,6 +1,14 @@
 import { ErrorResponse } from "../helpers/response";
-import { createOriginLogContext, emitGatewayLog } from "../gateway/logging";
-import type { IRequest } from "../types";
+import { createOriginLogContext } from "../gateway/logging";
+import { closed } from "../config/schema-helpers";
+import type { OriginContext } from "../types";
+import {
+  OriginTimeoutError,
+  forward,
+  stripPathPrefix,
+  toGatewayResponse,
+  type UpstreamBody,
+} from "./forward";
 
 type FailoverLifecycle = {
   onPrimaryFailure?: (status: number) => void;
@@ -11,10 +19,11 @@ type FailoverLifecycle = {
 };
 
 export type FailoverOptions = FailoverLifecycle & {
-  request: IRequest;
+  request: Request;
   primaryUrl: string;
   fallbackUrl: string;
   primaryHealthy: boolean;
+  timeout?: number;
   wrapResponse: (response: Response) => Response;
 };
 
@@ -24,6 +33,7 @@ type HealthCacheEntry = {
   healthy?: boolean;
   timestamp: number;
   refresh?: Promise<boolean>;
+  refreshStartedAt?: number;
 };
 
 const healthCache = new Map<string, HealthCacheEntry>();
@@ -33,17 +43,22 @@ const healthCacheKey = (url: string, healthPath: string, timeout: number): strin
 
 const canRetry = (method: string): boolean => retryableMethods.has(method);
 
+const allUpstreamsFailed = (error: unknown): Response =>
+  new ErrorResponse("All upstreams failed", error instanceof OriginTimeoutError ? 504 : 502);
+
 export const getHealthStatus = async (
   url: string,
   healthPath: string,
   timeout: number,
   cacheTtl: number,
+  waitUntil: (promise: Promise<unknown>) => void,
 ): Promise<boolean> => {
   const now = Date.now();
   const cacheKey = healthCacheKey(url, healthPath, timeout);
   const cached = healthCache.get(cacheKey);
 
-  if (cached?.refresh) {
+  // A refresh cut off with its invocation never settles, so an old one is replaced.
+  if (cached?.refresh && now - (cached.refreshStartedAt ?? 0) < timeout * 2) {
     return cached.healthy ?? cached.refresh;
   }
 
@@ -55,58 +70,16 @@ export const getHealthStatus = async (
     healthCache.set(cacheKey, { healthy, timestamp: Date.now() });
     return healthy;
   });
-  const entry: HealthCacheEntry = {
+  healthCache.set(cacheKey, {
     healthy: cached?.healthy,
     timestamp: cached?.timestamp ?? 0,
     refresh,
-  };
-  healthCache.set(cacheKey, entry);
-
-  if (cached?.healthy !== undefined) {
-    void refresh;
-    return cached.healthy;
-  }
-
-  return refresh;
-};
-
-const readRequestBody = async (request: IRequest): Promise<ArrayBuffer | undefined> => {
-  if (request.method === "GET" || request.method === "HEAD" || !request.body) {
-    return undefined;
-  }
-
-  return request.arrayBuffer();
-};
-
-type UpstreamBody = ArrayBuffer | ReadableStream<Uint8Array> | null | undefined;
-
-const createUpstreamRequest = (
-  request: IRequest,
-  targetUrl: string,
-  body: UpstreamBody,
-  streamBody: boolean,
-): Request => {
-  const headers = new Headers(request.headers);
-  headers.delete("host");
-
-  return new Request(targetUrl, {
-    method: request.method,
-    headers,
-    body,
-    ...(streamBody && body ? { duplex: "half" as const } : {}),
-    redirect: "manual",
+    refreshStartedAt: now,
   });
-};
+  waitUntil(refresh);
 
-const fetchUpstream = async (
-  request: IRequest,
-  targetUrl: string,
-  body: UpstreamBody,
-  streamBody: boolean,
-): Promise<Response> =>
-  fetch(createUpstreamRequest(request, targetUrl, body, streamBody), {
-    redirect: "manual",
-  });
+  return cached?.healthy ?? refresh;
+};
 
 export const checkUpstreamHealth = async (
   baseUrl: string,
@@ -144,57 +117,27 @@ export type FailoverOriginOptions = {
   healthCheckPath?: string;
   healthCheckTimeout?: number;
   healthCheckCacheTtl?: number;
+  timeout?: number;
 };
 
-const rewriteLocation = (
-  location: string | null,
-  gatewayUrl: URL,
-  primaryUrl: string,
-  fallbackUrl: string,
-  stripPrefix: string | undefined,
-  originType: string,
-): string | null => {
-  if (!location) return null;
-
-  try {
-    const primary = new URL(primaryUrl);
-    const fallback = new URL(fallbackUrl);
-
-    let locUrl: URL;
-    try {
-      locUrl = new URL(location);
-    } catch {
-      if (location.startsWith("/") && stripPrefix && !location.startsWith(stripPrefix)) {
-        return stripPrefix.replace(/\/$/, "") + location;
-      }
-      return location;
-    }
-
-    const isPrimary = locUrl.hostname === primary.hostname;
-    const isFallback = locUrl.hostname === fallback.hostname;
-
-    if (isPrimary || isFallback) {
-      const prefix = stripPrefix || "";
-      const newPath = prefix.replace(/\/$/, "") + locUrl.pathname + locUrl.search + locUrl.hash;
-      return `${gatewayUrl.origin}${newPath}`;
-    }
-
-    return location;
-  } catch {
-    emitGatewayLog(undefined, {
-      level: "error",
-      stage: "origin_rewrite",
-      outcome: "failed",
-      ...createOriginLogContext(new Request(gatewayUrl.toString()), originType),
-    });
-    return location;
-  }
-};
+export const failoverOptionsSchema = closed(
+  {
+    primaryUrl: { type: "string" },
+    fallbackUrl: { type: "string" },
+    stripPrefix: { type: "string" },
+    healthCheckPath: { type: "string" },
+    healthCheckTimeout: { type: "number" },
+    healthCheckCacheTtl: { type: "number" },
+    timeout: { type: "number" },
+  },
+  ["primaryUrl", "fallbackUrl"],
+);
 
 export const executeFailoverOrigin = async (
-  request: IRequest,
+  request: Request,
   options: FailoverOriginOptions,
   originType: string,
+  ctx: OriginContext,
 ) => {
   const {
     primaryUrl,
@@ -203,63 +146,50 @@ export const executeFailoverOrigin = async (
     healthCheckPath = "/api/health",
     healthCheckTimeout = 5000,
     healthCheckCacheTtl = 60000,
+    timeout,
   } = options;
 
   const url = new URL(request.url);
-  let pathAndQuery = url.pathname + url.search;
-
-  if (stripPrefix && pathAndQuery.startsWith(stripPrefix)) {
-    pathAndQuery = pathAndQuery.substring(stripPrefix.length);
-    if (!pathAndQuery.startsWith("/")) {
-      pathAndQuery = `/${pathAndQuery}`;
-    }
-  }
+  const pathAndQuery = (stripPathPrefix(url.pathname, stripPrefix) ?? url.pathname) + url.search;
 
   const primaryHealthy = await getHealthStatus(
     primaryUrl,
     healthCheckPath,
     healthCheckTimeout,
     healthCheckCacheTtl,
+    ctx.waitUntil,
   );
 
-  emitGatewayLog(undefined, {
-    level: "info",
-    stage: "origin",
-    outcome: primaryHealthy ? "routed_primary" : "routed_fallback",
-    ...createOriginLogContext(request, originType),
-  });
+  if (!primaryHealthy) {
+    ctx.log({
+      level: "info",
+      stage: "origin",
+      outcome: "routed_fallback",
+      ...createOriginLogContext(request, originType),
+    });
+  }
 
   const primaryTargetUrl = `${primaryUrl.replace(/\/$/, "")}${pathAndQuery}`;
   const fallbackTargetUrl = `${fallbackUrl.replace(/\/$/, "")}${pathAndQuery}`;
-  const wrapResponse = (response: Response): Response => {
-    const responseHeaders = new Headers(response.headers);
-    const location = responseHeaders.get("Location");
-    if (location) {
-      const newLocation = rewriteLocation(
-        location,
-        url,
-        primaryUrl,
-        fallbackUrl,
-        stripPrefix,
-        originType,
-      );
-      if (newLocation) responseHeaders.set("Location", newLocation);
-    }
-
-    return new Response(response.body, {
-      status: response.status,
-      headers: responseHeaders,
-    });
-  };
+  const wrapResponse = (response: Response): Response =>
+    toGatewayResponse(response, url, [primaryUrl, fallbackUrl], stripPrefix, () =>
+      ctx.log({
+        level: "error",
+        stage: "origin_rewrite",
+        outcome: "failed",
+        ...createOriginLogContext(request, originType),
+      }),
+    );
 
   return executeFailover({
     request,
     primaryUrl: primaryTargetUrl,
     fallbackUrl: fallbackTargetUrl,
     primaryHealthy,
+    timeout,
     wrapResponse,
     onPrimaryFailure: (status) => {
-      emitGatewayLog(undefined, {
+      ctx.log({
         level: "info",
         stage: "origin",
         outcome: "primary_failed",
@@ -268,7 +198,7 @@ export const executeFailoverOrigin = async (
       });
     },
     onFallbackStarted: () => {
-      emitGatewayLog(undefined, {
+      ctx.log({
         level: "info",
         stage: "origin",
         outcome: "fallback_started",
@@ -276,7 +206,7 @@ export const executeFailoverOrigin = async (
       });
     },
     onFallbackCompleted: (status) => {
-      emitGatewayLog(undefined, {
+      ctx.log({
         level: "info",
         stage: "origin",
         outcome: "fallback_completed",
@@ -285,7 +215,7 @@ export const executeFailoverOrigin = async (
       });
     },
     onRequestFailed: () => {
-      emitGatewayLog(undefined, {
+      ctx.log({
         level: "error",
         stage: "origin",
         outcome: "request_failed",
@@ -293,7 +223,7 @@ export const executeFailoverOrigin = async (
       });
     },
     onFallbackFailed: () => {
-      emitGatewayLog(undefined, {
+      ctx.log({
         level: "error",
         stage: "origin",
         outcome: "fallback_failed",
@@ -303,11 +233,12 @@ export const executeFailoverOrigin = async (
   });
 };
 
-// Fallback only runs for retryable methods, whose body is already buffered.
+// Fallback only runs for GET and HEAD, which carry no body.
 const fetchFallback = async (
   {
     request,
     fallbackUrl,
+    timeout,
     wrapResponse,
     onFallbackStarted,
     onFallbackCompleted,
@@ -318,10 +249,10 @@ const fetchFallback = async (
   onFallbackStarted?.();
   let fallbackResponse: Response;
   try {
-    fallbackResponse = await fetchUpstream(request, fallbackUrl, body, false);
-  } catch {
+    fallbackResponse = await forward(request, fallbackUrl, body, timeout);
+  } catch (error) {
     onFallbackFailed?.();
-    return new ErrorResponse("All upstreams failed", 503);
+    return allUpstreamsFailed(error);
   }
   onFallbackCompleted?.(fallbackResponse.status);
   return wrapResponse(fallbackResponse);
@@ -335,36 +266,25 @@ export const executeFailover = async (
     primaryUrl,
     fallbackUrl,
     primaryHealthy,
+    timeout,
     wrapResponse,
     onPrimaryFailure,
     onRequestFailed,
   } = options;
   const shouldRetry = canRetry(request.method);
-  let body: UpstreamBody;
-
-  try {
-    body = shouldRetry ? await readRequestBody(request) : request.body;
-  } catch {
-    onRequestFailed?.();
-    return new ErrorResponse("All upstreams failed", 503);
-  }
+  const body: UpstreamBody = shouldRetry ? undefined : request.body;
 
   const firstUrl = primaryHealthy ? primaryUrl : fallbackUrl;
   const firstIsPrimary = primaryHealthy;
   let firstResponse: Response;
 
   try {
-    firstResponse = await fetchUpstream(
-      request,
-      firstUrl,
-      body,
-      !shouldRetry && body !== null && body !== undefined,
-    );
-  } catch {
+    firstResponse = await forward(request, firstUrl, body, timeout);
+  } catch (error) {
     onRequestFailed?.();
 
     if (!firstIsPrimary || !shouldRetry) {
-      return new ErrorResponse("All upstreams failed", 503);
+      return allUpstreamsFailed(error);
     }
 
     return fetchFallback(options, body);

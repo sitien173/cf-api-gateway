@@ -1,47 +1,39 @@
-export declare interface IRequest extends Request {
-  user?: string;
-}
+import type { Schema } from "@cfworker/json-schema";
+import type { GatewayEnv, GatewayLogger } from "../gateway/types";
 
-export declare interface IRequestInit extends RequestInit {
-  user?: string;
-  headers: Headers;
-}
-
-export interface Auth0Bindings {
-  AUTH0_ISSUER?: string;
-  AUTH0_AUDIENCE?: string;
-}
-
-export type RequestPolicyEnv = Auth0Bindings & {
-  [key: string]: unknown;
+// The configuration schema reads optionsSchema; the compiler calls compile once per policy.
+export type HandlerMetadata<TOptions> = {
+  optionsSchema?: Schema;
+  compile?(options: TOptions): void;
 };
 
 export type TRequestPolicyHandler<TOptions = unknown> = {
   handle(
-    request: IRequest,
+    request: Request,
     options: TOptions,
-    env: RequestPolicyEnv,
-  ): Promise<IRequest | Response>;
-}["handle"];
+    // Policies may read a Worker secret whose name comes from their options.
+    env: GatewayEnv & Record<string, unknown>,
+    log?: GatewayLogger,
+  ): Promise<Request | Response>;
+}["handle"] &
+  HandlerMetadata<TOptions>;
 
 export type TResponsePolicyHandler<TOptions = unknown> = {
   handle(
     response: Response,
     options: TOptions,
-    request?: IRequest,
+    request?: Request,
   ): void | Response | Promise<void | Response>;
-}["handle"];
+}["handle"] &
+  HandlerMetadata<TOptions>;
 
-export type TRequestPolicy = {
-  handler: TRequestPolicyHandler;
-  options: unknown;
-};
-
-export type TResponsePolicy = {
-  handler: TResponsePolicyHandler;
-  options: unknown;
+// Origins pass background work to waitUntil so it survives the end of the invocation.
+export type OriginContext = {
+  waitUntil(promise: Promise<unknown>): void;
+  log: GatewayLogger;
 };
 
 export type TOriginHandler<TOptions = unknown> = {
-  handle(request: IRequest, options: TOptions): Promise<Response>;
-}["handle"];
+  handle(request: Request, options: TOptions, ctx: OriginContext): Promise<Response>;
+}["handle"] &
+  HandlerMetadata<TOptions>;

@@ -56,7 +56,7 @@ const createBackgroundContext = (): BackgroundContext => {
 test("logAnalytics writes the documented Analytics Engine datapoint layout", async () => {
   const dataset = createDataset();
 
-  await logAnalytics(
+  logAnalytics(
     {
       routePath: "/api/orders",
       method: "POST",
@@ -127,45 +127,52 @@ test("each gateway response creates one datapoint and route misses use a fixed l
   assert.deepEqual(dataset.points.map((point) => point.doubles?.[0]), [200, 404]);
 });
 
-test("analytics failures stay in the background and preserve the response", async () => {
-  const failures = [
+test("analytics failures are logged and preserve the response", async () => {
+  const datapoints: unknown[] = [];
+  const { ctx, pending } = createBackgroundContext();
+  const logs: { stage: string; outcome: string }[] = [];
+
+  const response = await executeGatewayRequest(
+    createResponseGateway(),
+    new Request("https://gateway.example.com/api/orders"),
+    {},
+    ctx,
     {
-      name: "synchronous throw",
-      createLogger: (datapoints: unknown[]) => (_event: unknown, _env: unknown) => {
-        datapoints.push(_event);
+      logAnalytics: (event) => {
+        datapoints.push(event);
         throw new Error("sync analytics failure");
       },
+      logEvent: (event) => logs.push({ stage: event.stage, outcome: event.outcome }),
     },
-    {
-      name: "rejected promise",
-      createLogger: (datapoints: unknown[]) => async (_event: unknown, _env: unknown) => {
-        datapoints.push(_event);
-        throw new Error("async analytics failure");
-      },
-    },
-  ];
+  );
 
-  for (const failure of failures) {
-    const datapoints: unknown[] = [];
-    const { ctx, pending } = createBackgroundContext();
-    const logs: { stage: string; outcome: string }[] = [];
+  assert.equal(response.status, 200);
+  assert.equal(pending.length, 0);
+  assert.equal(datapoints.length, 1);
+  assert.deepEqual(logs, [
+    { stage: "analytics", outcome: "failed" },
+    { stage: "response_finalization", outcome: "completed" },
+  ]);
+});
 
-    const response = await executeGatewayRequest(
-      createResponseGateway(),
-      new Request("https://gateway.example.com/api/orders"),
-      {},
-      ctx,
-      {
-        logAnalytics: failure.createLogger(datapoints),
-        logEvent: (event) => logs.push({ stage: event.stage, outcome: event.outcome }),
-      },
-    );
+test("logAnalytics is silent when disabled and logs a missing binding once", () => {
+  const originalError = console.error;
+  const originalLog = console.log;
+  const messages: unknown[] = [];
+  console.error = (message: unknown) => messages.push(message);
+  console.log = (message: unknown) => messages.push(message);
+  const event = { routePath: "/api/orders", method: "GET", status: 200, latencyMs: 1 };
 
-    assert.equal(response.status, 200, failure.name);
-    const results = await Promise.allSettled(pending);
-    assert.equal(results.length, 1, failure.name);
-    assert.equal(results[0].status, "rejected", failure.name);
-    assert.equal(datapoints.length, 1, failure.name);
-    assert.equal(logs.some((log) => log.stage === "execution"), false, failure.name);
+  try {
+    logAnalytics(event, { GATEWAY_NAME: "test-gateway" });
+    assert.equal(messages.length, 0);
+
+    logAnalytics(event, { ANALYTICS_ENABLED: "true" });
+    logAnalytics(event, { ANALYTICS_ENABLED: "true" });
+    assert.equal(messages.length, 1);
+    assert.deepEqual(messages[0], { level: "error", stage: "analytics", outcome: "binding_missing" });
+  } finally {
+    console.error = originalError;
+    console.log = originalLog;
   }
 });

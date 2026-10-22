@@ -1,17 +1,18 @@
+import { emitGatewayLog } from "../gateway/logging";
 import type { AnalyticsEvent, GatewayEnv } from "../gateway/types";
 
-export const logAnalytics = (
-  event: AnalyticsEvent,
-  env: GatewayEnv,
-): Promise<void> => {
-  if (!env.GATEWAY_NAME || !env.API_ANALYTICS) {
-    console.error("Analytics Engine binding is not configured");
-    return Promise.resolve();
-  }
+let missingBindingLogged = false;
 
-  if (env.ANALYTICS_ENABLED !== "true") {
-    console.log("Analytics are not logged in non-production environments");
-    return Promise.resolve();
+export const logAnalytics = (event: AnalyticsEvent, env: GatewayEnv): void => {
+  if (env.ANALYTICS_ENABLED !== "true") return;
+
+  if (!env.GATEWAY_NAME || !env.API_ANALYTICS) {
+    // Once per isolate, so a missing binding does not add a log event to every request.
+    if (!missingBindingLogged) {
+      missingBindingLogged = true;
+      emitGatewayLog(undefined, { level: "error", stage: "analytics", outcome: "binding_missing" }, env);
+    }
+    return;
   }
 
   env.API_ANALYTICS.writeDataPoint({
@@ -19,5 +20,4 @@ export const logAnalytics = (
     blobs: [event.routePath, event.method],
     doubles: [event.status, event.latencyMs],
   });
-  return Promise.resolve();
 };

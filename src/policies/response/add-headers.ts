@@ -1,4 +1,5 @@
 import { TResponsePolicyHandler } from "../../types";
+import { closed } from "../../config/schema-helpers";
 
 type AddHeadersOptions = {
   headers: Record<string, string>;
@@ -12,3 +13,8 @@ export const addHeaders: TResponsePolicyHandler<AddHeadersOptions> = (
     response.headers.set(key, value);
   }
 };
+
+addHeaders.optionsSchema = closed(
+  { headers: { type: "object", additionalProperties: { type: "string" } } },
+  ["headers"],
+);

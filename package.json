@@ -17,7 +17,7 @@
     "lint": "eslint .",
     "test": "tsx --test test/**/*.test.ts",
     "test:coverage": "mkdir -p coverage && tsx --test --experimental-test-coverage --test-coverage-include='src/**' --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=coverage/lcov.info test/**/*.test.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "check": "npm run typecheck && npm test",
     "types": "wrangler types",
     "types:check": "wrangler types --check"
@@ -25,6 +25,6 @@
   "dependencies": {
     "@cfworker/json-schema": "^1.12.5",
     "@configcat/sdk": "^1.1.0",
-    "jose": "^4.11.1"
+    "jose": "^6.2.13"
   }
 }

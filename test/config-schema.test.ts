@@ -14,7 +14,10 @@ test("accepts the current gateway configuration", () => {
   assert.equal(result.valid, true);
   if (result.valid) {
     assert.equal(result.config.routes.length, config.routes.length);
-    assert.equal(result.config.policies.length, config.policies.length);
+    assert.equal(
+      Object.keys(result.config.policies).length,
+      Object.keys(config.policies).length,
+    );
   }
 });
 
@@ -86,6 +89,20 @@ test("rejects invalid methods and malformed type-specific options", () => {
   assert.equal(validateGatewayConfig({ ...config, origins: { broken: { type: "url", options: {} } } }).valid, false);
   assert.equal(validateGatewayConfig({ ...config, routes: [{ ...baseRoute, auth: "none" }] }).valid, true);
   assert.equal(validateGatewayConfig({ ...config, routes: [{ ...baseRoute, auth: "optional" }] }).valid, false);
+});
+
+test("derives policy options from handler schemas", () => {
+  const withPolicy = (policy: Record<string, unknown>) =>
+    validateGatewayConfig({ ...config, policies: { ...config.policies, basic: policy } }).valid;
+  assert.equal(withPolicy({ type: "basicAuth", options: { secret: "BASIC_AUTH_ADMIN" } }), true);
+  assert.equal(withPolicy({ type: "basicAuth", options: { username: "alice", password: "secret" } }), false);
+  assert.equal(withPolicy({ type: "basicAuth", options: { secret: "basic-auth" } }), false);
+  assert.equal(withPolicy({ type: "apiKeyOrAuth0" }), true);
+  assert.equal(withPolicy({ type: "changeMethod" }), false);
+  assert.equal(
+    validateGatewayConfig({ ...config, origins: { ...config.origins, legacy: { type: "proxyAll", options: { primaryUrl: "https://a.test", fallbackUrl: "https://b.test" } } } }).valid,
+    true,
+  );
 });
 
 test("rejects unsupported and wildcard route path forms", () => {

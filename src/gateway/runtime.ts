@@ -1,19 +1,17 @@
+import { errorMessage } from "../helpers/errors";
 import { ErrorResponse } from "../helpers/response";
-import type { IRequest } from "../types";
 import { createLogContext, emitGatewayLog } from "./logging";
 import type {
   CompiledGateway,
+  CompiledResponsePolicy,
   CompiledRoute,
   ExecutionDependencies,
   GatewayEnv,
   GatewayExecutionContext,
+  GatewayLogEvent,
 } from "./types";
 
 const defaultNow = () => Date.now();
-const analyticsRouteMissLabel = "route_miss";
-
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 const isPrefixRoute = (route: CompiledRoute): boolean =>
   route.matchMode === "prefix" || route.matchMode === "prefixStop";
@@ -24,16 +22,13 @@ const matchesPattern = (route: CompiledRoute, pathname: string): boolean =>
 // Routes are sorted exact, then prefixes longest first, then regexes in document order.
 const resolveRoute = (
   gateway: CompiledGateway,
-  request: Request,
+  method: string,
   requestUrl: URL,
-  methodOverride?: string,
 ): CompiledRoute | undefined => {
-  const requestMethod = methodOverride ?? request.method;
   const { pathname } = requestUrl;
   let rememberedPrefix: CompiledRoute | undefined;
   let prefixMatched = false;
-  for (const route of gateway.routes) {
-    if (route.method !== requestMethod) continue;
+  for (const route of gateway.routesByMethod.get(method) ?? []) {
     if (isPrefixRoute(route)) {
       if (prefixMatched || !pathname.startsWith(route.pattern)) continue;
       prefixMatched = true;
@@ -46,33 +41,35 @@ const resolveRoute = (
   return rememberedPrefix;
 };
 
+// Origin handlers must return a constructed Response so policies can safely mutate its headers.
 const applyResponsePolicies = async (
-  route: CompiledRoute,
+  policies: CompiledResponsePolicy[],
   response: Response,
   request: Request,
-  dependencies: ExecutionDependencies,
 ): Promise<Response> => {
   let currentResponse = response;
 
-  // Origin handlers must return a constructed Response so policies can safely mutate its headers.
-  for (const policy of route.responsePolicies) {
+  for (const policy of policies) {
     const result = await policy.handler(currentResponse, policy.options, request);
     if (result instanceof Response) {
       currentResponse = result;
     }
-
-    emitGatewayLog(dependencies.logEvent, {
-      level: "info",
-      stage: "response_policy",
-      outcome: "applied",
-      ...createLogContext(request, route),
-      policyName: policy.name,
-      status: currentResponse.status,
-    });
   }
 
   return currentResponse;
 };
+
+// Browsers can read short-circuit and error statuses only when CORS headers are present.
+const applyCorsPolicies = (
+  route: CompiledRoute,
+  response: Response,
+  request: Request,
+): Promise<Response> =>
+  applyResponsePolicies(
+    route.responsePolicies.filter((policy) => policy.type === "cors"),
+    response,
+    request,
+  );
 
 const resolvePreflightRoute = (
   gateway: CompiledGateway,
@@ -88,218 +85,152 @@ const resolvePreflightRoute = (
     return undefined;
   }
 
-  return resolveRoute(gateway, request, requestUrl, requestedMethod);
+  return resolveRoute(gateway, requestedMethod, requestUrl);
 };
 
-const finalizeResponse = (
+export type FinalizeDetails = {
+  route?: CompiledRoute;
+  outcome?: "completed" | "short_circuit" | "route_miss" | "config_unavailable";
+  policyName?: string;
+};
+
+// Emits the single info event for a request and records analytics.
+export const finalizeResponse = (
   request: Request,
   response: Response,
   env: GatewayEnv,
-  ctx: GatewayExecutionContext,
   dependencies: ExecutionDependencies,
   latencyStart: number,
-  route?: CompiledRoute,
+  { route, outcome = "completed", policyName }: FinalizeDetails = {},
 ): Response => {
   const latency = (dependencies.now ?? defaultNow)() - latencyStart;
 
-  const logAnalytics = dependencies.logAnalytics;
-  if (logAnalytics) {
-    const analyticsEvent = {
-      routePath: route?.path ?? analyticsRouteMissLabel,
-      method: request.method,
-      status: response.status,
-      latencyMs: latency,
-    };
+  if (dependencies.logAnalytics) {
     try {
-      ctx.waitUntil(Promise.resolve(logAnalytics(analyticsEvent, env)));
+      dependencies.logAnalytics(
+        {
+          routePath:
+            route?.path ?? (outcome === "config_unavailable" ? outcome : "route_miss"),
+          method: request.method,
+          status: response.status,
+          latencyMs: latency,
+        },
+        env,
+      );
     } catch (error) {
-      ctx.waitUntil(Promise.reject(error));
+      emitGatewayLog(
+        dependencies.logEvent,
+        {
+          level: "error",
+          stage: "analytics",
+          outcome: "failed",
+          ...createLogContext(request, route),
+          reason: errorMessage(error),
+        },
+        env,
+      );
     }
   }
 
-  emitGatewayLog(dependencies.logEvent, {
-    level: "info",
-    stage: "response_finalization",
-    outcome: "completed",
-    ...createLogContext(request, route),
-    status: response.status,
-    latencyMs: latency,
-  });
+  emitGatewayLog(
+    dependencies.logEvent,
+    {
+      level: "info",
+      stage: "response_finalization",
+      outcome,
+      ...createLogContext(request, route),
+      ...(policyName ? { policyName } : {}),
+      status: response.status,
+      latencyMs: latency,
+    },
+    env,
+  );
 
   return response;
 };
 
 export const executeGatewayRequest = async (
   gateway: CompiledGateway,
-  originalRequest: IRequest,
+  originalRequest: Request,
   env: GatewayEnv,
   ctx: GatewayExecutionContext,
   dependencies: ExecutionDependencies = {},
 ): Promise<Response> => {
   const latencyStart = (dependencies.now ?? defaultNow)();
-  const configuredLogEvent = dependencies.logEvent;
-  dependencies = {
-    ...dependencies,
-    logEvent: (event) =>
-      emitGatewayLog(configuredLogEvent, event, env),
-  };
   const requestUrl = new URL(originalRequest.url);
   let route: CompiledRoute | undefined;
-  let isPreflight: boolean;
+  const log = (event: GatewayLogEvent): void =>
+    emitGatewayLog(
+      dependencies.logEvent,
+      { ...createLogContext(originalRequest, route), ...event },
+      env,
+    );
+  const finalize = (response: Response, details?: FinalizeDetails): Response =>
+    finalizeResponse(originalRequest, response, env, dependencies, latencyStart, {
+      route,
+      ...details,
+    });
 
   try {
-    emitGatewayLog(dependencies.logEvent, {
-      level: "info",
-      stage: "request_received",
-      outcome: "received",
-      ...createLogContext(originalRequest),
-    });
-
-    const preflightRoute = resolvePreflightRoute(
-      gateway,
-      originalRequest,
-      requestUrl,
-    );
-    isPreflight = preflightRoute !== undefined;
-    route =
-      preflightRoute ?? resolveRoute(gateway, originalRequest, requestUrl);
+    const preflightRoute = resolvePreflightRoute(gateway, originalRequest, requestUrl);
+    route = preflightRoute ?? resolveRoute(gateway, originalRequest.method, requestUrl);
 
     if (!route) {
-      emitGatewayLog(dependencies.logEvent, {
-        level: "info",
-        stage: "route_resolution",
-        outcome: "route_miss",
-        ...createLogContext(originalRequest),
-        status: 404,
-      });
+      return finalize(new ErrorResponse("Route not found", 404), { outcome: "route_miss" });
+    }
 
-      return finalizeResponse(
-        originalRequest,
-        new ErrorResponse("Route not found", 404),
-        env,
-        ctx,
-        dependencies,
-        latencyStart,
-        route,
+    if (preflightRoute) {
+      return finalize(
+        await applyResponsePolicies(
+          route.responsePolicies,
+          new Response(null, { status: 204 }),
+          originalRequest,
+        ),
       );
     }
 
-    emitGatewayLog(dependencies.logEvent, {
-      level: "info",
-      stage: "route_resolution",
-      outcome: "matched",
-      ...createLogContext(originalRequest, route),
-    });
-
-    if (isPreflight) {
-      const preflightResponse = await applyResponsePolicies(
-        route,
-        new Response(null, { status: 204 }),
-        originalRequest,
-        dependencies,
-      );
-
-      return finalizeResponse(
-        originalRequest,
-        preflightResponse,
-        env,
-        ctx,
-        dependencies,
-        latencyStart,
-        route,
-      );
-    }
-
-    let modifiedRequest: IRequest = originalRequest;
+    let modifiedRequest: Request = originalRequest;
 
     for (const policy of route.requestPolicies) {
-      const result = await policy.handler(modifiedRequest, policy.options, env);
+      const result = await policy.handler(modifiedRequest, policy.options, env, (event) =>
+        log({ ...event, policyName: policy.name }),
+      );
 
       if (result instanceof Response) {
-        emitGatewayLog(dependencies.logEvent, {
-          level: "info",
-          stage: "request_policy",
+        return finalize(await applyCorsPolicies(route, result, originalRequest), {
           outcome: "short_circuit",
-          ...createLogContext(originalRequest, route),
           policyName: policy.name,
-          status: result.status,
         });
-
-        return finalizeResponse(
-          originalRequest,
-          result,
-          env,
-          ctx,
-          dependencies,
-          latencyStart,
-          route,
-        );
       }
-
-      emitGatewayLog(dependencies.logEvent, {
-        level: "info",
-        stage: "request_policy",
-        outcome: "continued",
-        ...createLogContext(originalRequest, route),
-        policyName: policy.name,
-      });
 
       modifiedRequest = result;
     }
 
-    emitGatewayLog(dependencies.logEvent, {
-      level: "info",
-      stage: "origin",
-      outcome: "started",
-      ...createLogContext(originalRequest, route),
+    const originResponse = await route.origin.handler(modifiedRequest, route.origin.options, {
+      waitUntil: (promise) => ctx.waitUntil(promise),
+      log,
     });
 
-    const originResponse = await route.origin.handler(
-      modifiedRequest,
-      route.origin.options,
-    );
-    emitGatewayLog(dependencies.logEvent, {
-      level: "info",
-      stage: "origin",
-      outcome: "completed",
-      ...createLogContext(originalRequest, route),
-      status: originResponse.status,
-    });
-
-    const finalResponse = await applyResponsePolicies(
-      route,
-      originResponse,
-      originalRequest,
-      dependencies,
-    );
-
-    return finalizeResponse(
-      originalRequest,
-      finalResponse,
-      env,
-      ctx,
-      dependencies,
-      latencyStart,
-      route,
+    return finalize(
+      await applyResponsePolicies(route.responsePolicies, originResponse, originalRequest),
     );
   } catch (error) {
-    emitGatewayLog(dependencies.logEvent, {
+    log({
       level: "error",
       stage: "execution",
       outcome: "failed",
-      ...createLogContext(originalRequest, route),
       status: 500,
       reason: errorMessage(error),
     });
 
-    return finalizeResponse(
-      originalRequest,
-      new ErrorResponse("An error occured.", 500),
-      env,
-      ctx,
-      dependencies,
-      latencyStart,
-      route,
-    );
+    let response: Response = new ErrorResponse("An error occured.", 500);
+    if (route) {
+      try {
+        response = await applyCorsPolicies(route, response, originalRequest);
+      } catch {
+        // The original failure is already logged; the 500 goes out without CORS headers.
+      }
+    }
+    return finalize(response);
   }
 };

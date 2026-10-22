@@ -2,11 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { proxyAll, upstreamWithFallback } from "../src/origins/index.ts";
+import type { OriginContext } from "../src/types/index.ts";
 import {
   checkUpstreamHealth,
   executeFailover,
   getHealthStatus,
 } from "../src/origins/failover.ts";
+
+const originContext: OriginContext = { waitUntil: () => {}, log: () => {} };
 
 const mutationScenarios = [
   {
@@ -45,10 +48,12 @@ test("failover handlers dedupe concurrent health checks through one shared cache
     const first = proxyAll(
       new Request("https://gateway.example.com/one"),
       { primaryUrl, fallbackUrl },
+      originContext,
     );
     const second = upstreamWithFallback(
       new Request("https://gateway.example.com/two"),
       { primaryUrl, fallbackUrl },
+      originContext,
     );
 
     await Promise.resolve();
@@ -112,8 +117,8 @@ test("health cache separates health paths for the same upstream", async () => {
   }) as typeof fetch;
 
   try {
-    assert.equal(await getHealthStatus(baseUrl, "/health-a", 5000, 60000), true);
-    assert.equal(await getHealthStatus(baseUrl, "/health-b", 5000, 60000), false);
+    assert.equal(await getHealthStatus(baseUrl, "/health-a", 5000, 60000, () => {}), true);
+    assert.equal(await getHealthStatus(baseUrl, "/health-b", 5000, 60000, () => {}), false);
     assert.deepEqual(calls, [`${baseUrl}/health-a`, `${baseUrl}/health-b`]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -226,9 +231,10 @@ test("proxyAll never replays mutation requests to fallback", async () => {
           fallbackUrl,
           healthCheckCacheTtl: 0,
         },
+        originContext,
       );
 
-      assert.equal(response.status, 503, scenario.name);
+      assert.equal(response.status, scenario.response ? 503 : 502, scenario.name);
       assert.deepEqual(calls, [`${primaryUrl}/api/health`, `${primaryUrl}/orders`], scenario.name);
     } finally {
       globalThis.fetch = originalFetch;
@@ -285,11 +291,13 @@ test("health-check timers clear when health checks fail", async () => {
           fallbackUrl,
           healthCheckCacheTtl: 0,
         },
+        originContext,
       );
 
       assert.equal(response.status, 200, `${handler.name}: ${calls.join(", ")}`);
-      assert.equal(scheduled, 1, handler.name);
-      assert.equal(cleared, 1, handler.name);
+      // One timer for the health check and one for the fallback request.
+      assert.equal(scheduled, 2, handler.name);
+      assert.equal(cleared, 2, handler.name);
     }
   } finally {
     globalThis.fetch = originalFetch;
@@ -315,7 +323,7 @@ test("fallback requests use manual redirects after a primary transport failure",
     for (const handler of handlers) {
       const primaryUrl = `https://redirect-primary-${handler.name}.example.com`;
       const fallbackUrl = `https://redirect-fallback-${handler.name}.example.com`;
-      let fallbackRedirect: RequestRedirect | undefined;
+      let fallbackRedirect: RequestInit["redirect"];
 
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         const request = input instanceof Request ? input : new Request(input);
@@ -339,6 +347,7 @@ test("fallback requests use manual redirects after a primary transport failure",
           fallbackUrl,
           healthCheckCacheTtl: 0,
         },
+        originContext,
       );
 
       assert.equal(response.status, 200, handler.name);
@@ -389,6 +398,7 @@ test("GET and HEAD retry once, while mutation methods preserve primary failures"
             fallbackUrl,
             healthCheckCacheTtl: 0,
           },
+          originContext,
         );
 
         const shouldRetry = method === "GET" || method === "HEAD";
@@ -440,6 +450,7 @@ test("unhealthy primaries send mutations directly to fallback once", async () =>
           fallbackUrl,
           healthCheckCacheTtl: 0,
         },
+        originContext,
       );
 
       assert.equal(response.status, 201, handler.name);
@@ -476,6 +487,84 @@ test("response rewrite errors do not trigger a fallback transport attempt", asyn
       /rewrite failed/,
     );
     assert.deepEqual(requestUrls, [primaryUrl]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("stale health results refresh in waitUntil and replace a refresh that never settled", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalNow = Date.now;
+  const baseUrl = "https://stuck-refresh.example.com";
+  const waited: Promise<unknown>[] = [];
+  const waitUntil = (promise: Promise<unknown>) => waited.push(promise);
+  let now = 1000;
+  let healthChecks = 0;
+
+  Date.now = () => now;
+  globalThis.fetch = (async () => {
+    healthChecks += 1;
+    // The second check models a refresh cut off with its invocation.
+    if (healthChecks === 2) return new Promise<Response>(() => {});
+    return new Response("ok", { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    assert.equal(await getHealthStatus(baseUrl, "/health", 100, 1000, waitUntil), true);
+    now += 1001;
+    assert.equal(await getHealthStatus(baseUrl, "/health", 100, 1000, waitUntil), true);
+    now += 199;
+    assert.equal(await getHealthStatus(baseUrl, "/health", 100, 1000, waitUntil), true);
+    assert.equal(healthChecks, 2);
+    now += 2;
+    assert.equal(await getHealthStatus(baseUrl, "/health", 100, 1000, waitUntil), true);
+    assert.equal(healthChecks, 3);
+    assert.equal(waited.length, 3);
+  } finally {
+    Date.now = originalNow;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a primary that exceeds the timeout falls back for GET and returns 504 for mutations", async () => {
+  const originalFetch = globalThis.fetch;
+  const primaryUrl = "https://slow-primary.example.com";
+  const fallbackUrl = "https://slow-fallback.example.com";
+  const calls: string[] = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const request = input instanceof Request ? input : new Request(input);
+    calls.push(`${request.method} ${request.url}`);
+    if (request.url === `${primaryUrl}/api/health`) {
+      return new Response("ok", { status: 200 });
+    }
+    if (request.url === `${primaryUrl}/orders`) {
+      return new Promise<Response>((_resolve, reject) => {
+        request.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    }
+    if (request.url === `${fallbackUrl}/orders`) {
+      return new Response("fallback", { status: 200 });
+    }
+    throw new Error(`unexpected request: ${request.url}`);
+  }) as typeof fetch;
+
+  try {
+    const options = { primaryUrl, fallbackUrl, timeout: 5 };
+    const get = await upstreamWithFallback(
+      new Request("https://gateway.example.com/orders"),
+      options,
+      originContext,
+    );
+    const post = await upstreamWithFallback(
+      new Request("https://gateway.example.com/orders", { method: "POST", body: "mutation" }),
+      options,
+      originContext,
+    );
+
+    assert.equal(get.status, 200);
+    assert.equal(post.status, 504);
+    assert.deepEqual(calls.filter((call) => call.startsWith("POST")), [`POST ${primaryUrl}/orders`]);
   } finally {
     globalThis.fetch = originalFetch;
   }

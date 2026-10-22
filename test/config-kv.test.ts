@@ -89,6 +89,30 @@ test("ConfigCat cache skips byte-identical writes per key", async () => {
   assert.equal(putCalls, 3);
 });
 
+test("ConfigCat cache ignores timestamp-only changes and seeds from reads", async () => {
+  const kv = createFakeKv();
+  const env = createEnv("gateway-a", kv);
+  let putCalls = 0;
+  const originalPut = kv.put;
+  kv.put = async (key, value) => {
+    putCalls += 1;
+    await originalPut(key, value);
+  };
+
+  const warm = createConfigCatCache(env);
+  await warm.set("sdk-key", "100\n\"etag-1\"\n{}");
+  await warm.set("sdk-key", "200\n\"etag-1\"\n{}");
+  assert.equal(putCalls, 1);
+
+  const cold = createConfigCatCache(env);
+  await cold.get("sdk-key");
+  await cold.set("sdk-key", "300\n\"etag-1\"\n{}");
+  assert.equal(putCalls, 1);
+
+  await cold.set("sdk-key", "400\n\"etag-2\"\n{\"changed\":true}");
+  assert.equal(putCalls, 2);
+});
+
 test("readLkg uses the KV cache TTL", async () => {
   const kv = createFakeKv();
   const env = createEnv("gateway-a", kv);
@@ -104,25 +128,17 @@ test("readLkg uses the KV cache TTL", async () => {
   assert.deepEqual(options, { cacheTtl: 60 });
 });
 
-test("readLkg handles missing, legacy, and corrupt values", async () => {
+test("readLkg treats missing, non-envelope, and corrupt values as absent", async () => {
   const kv = createFakeKv();
   const env = createEnv("gateway-a", kv);
 
   assert.equal(await readLkg(env), null);
 
-  kv.values.set(getLkgKey(env), "legacy document");
-  assert.deepEqual(await readLkg(env), {
-    version: 1,
-    raw: "legacy document",
-    timestamp: 0,
-  });
+  kv.values.set(getLkgKey(env), JSON.stringify({ routes: [] }));
+  assert.equal(await readLkg(env), null);
 
   kv.values.set(getLkgKey(env), "{not-json");
-  assert.deepEqual(await readLkg(env), {
-    version: 1,
-    raw: "{not-json",
-    timestamp: 0,
-  });
+  assert.equal(await readLkg(env), null);
 });
 
 test("writeLkg stores a versioned raw document and timestamp", async () => {
@@ -153,13 +169,36 @@ test("writeLkg does not overwrite an equal or newer envelope", async () => {
   assert.equal(JSON.parse(kv.values.get(key)!).raw, "newer document");
 });
 
-test("writeLkg catches a rejected KV write", async () => {
+test("writeLkg skips an unchanged document with a newer timestamp", async () => {
+  const kv = createFakeKv();
+  const env = createEnv("gateway-a", kv);
+
+  assert.equal(await writeLkg(env, "document", 100), true);
+  assert.equal(await writeLkg(env, "document", 200), false);
+  assert.equal(JSON.parse(kv.values.get(getLkgKey(env))!).timestamp, 100);
+});
+
+test("writeLkg logs a rejected KV write as a structured event", async () => {
   const kv = createFakeKv();
   kv.put = async () => {
     throw new Error("KV unavailable");
   };
+  const events: Array<{ level: string; stage: string; outcome: string; reason?: string }> = [];
 
-  const result = await writeLkg(createEnv("gateway-a", kv), "document", 100);
+  const result = await writeLkg(
+    createEnv("gateway-a", kv),
+    "document",
+    100,
+    (event) => events.push(event),
+  );
 
   assert.equal(result, false);
+  assert.deepEqual(events, [
+    {
+      level: "error",
+      stage: "config_resolution",
+      outcome: "kv_write_failed",
+      reason: "KV unavailable",
+    },
+  ]);
 });

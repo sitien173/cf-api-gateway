@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compileGateway } from "../src/gateway/compiler.ts";
+import { cors } from "../src/policies/response/cors.ts";
 import type { GatewayConfig, GatewayHandlers } from "../src/gateway/types.ts";
 
 const handlers: GatewayHandlers = {
@@ -77,5 +78,25 @@ test("proxyAll does not alter a route's configured match mode", () => {
 });
 
 test("rejects credentialed wildcard CORS policy", () => {
-  assert.throws(() => compileGateway(config({ policies: { bad: { type: "cors", options: { allowedOrigins: ["*"], allowCredentials: true } } }, routes: [] }), handlers), /CORS policy bad cannot combine wildcard allowed origins with credentials/);
+  assert.throws(() => compileGateway(config({ policies: { bad: { type: "cors", options: { allowedOrigins: ["*"], allowCredentials: true } } }, routes: [] }), { ...handlers, responsePolicies: { cors } }), /Policy bad: CORS cannot combine wildcard allowed origins with credentials/);
+});
+
+test("requires gateway auth when changeMethod turns a public route into a write", () => {
+  const withChange = { ...handlers, requestPolicies: { ...handlers.requestPolicies, changeMethod: async (request: Request) => request } };
+  const policies = { auth: { type: "apiKeyOrAuth0" }, "to-delete": { type: "changeMethod", options: { method: "delete" } } };
+  assert.throws(() => compileGateway(config({ policies, routes: [{ path: "/x", methods: ["GET"], origin: "main", request: ["to-delete"] }] }), withChange), /Route GET \/x: must use an apiKeyOrAuth0 or basicAuth policy/);
+  assert.doesNotThrow(() => compileGateway(config({ policies, routes: [{ path: "/x", methods: ["GET"], origin: "main", request: ["auth", "to-delete"] }] }), withChange));
+});
+
+test("requires the auth policy to run before body and method policies on write routes", () => {
+  const withValidation = { ...handlers, requestPolicies: { ...handlers.requestPolicies, jsonBodyValidation: async (request: Request) => request } };
+  const policies = { auth: { type: "apiKeyOrAuth0" }, body: { type: "jsonBodyValidation", options: { schema: {} } } };
+  assert.throws(() => compileGateway(config({ policies, routes: [{ path: "/x", methods: ["POST"], origin: "main", request: ["body", "auth"] }] }), withValidation), /Route POST \/x: must run its auth policy before jsonBodyValidation and changeMethod/);
+  assert.doesNotThrow(() => compileGateway(config({ policies, routes: [{ path: "/x", methods: ["POST"], origin: "main", request: ["auth", "body"] }] }), withValidation));
+});
+
+test("accepts basicAuth as gateway auth on write routes", () => {
+  const withBasic = { ...handlers, requestPolicies: { basicAuth: async (request: Request) => request } };
+  const compiled = compileGateway(config({ policies: { basic: { type: "basicAuth", options: { secret: "BASIC_AUTH_ADMIN" } } }, routes: [{ path: "/x", methods: ["POST"], origin: "main", request: ["basic"] }] }), withBasic);
+  assert.deepEqual(compiled.routes.map(({ method }) => method), ["POST"]);
 });
