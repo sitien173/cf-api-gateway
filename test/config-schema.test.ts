@@ -105,6 +105,24 @@ test("derives policy options from handler schemas", () => {
   );
 });
 
+test("accepts valid mount prefixes and rejects invalid mount patterns", () => {
+  const baseRoute = config.routes[0];
+  for (const mount of ["/open-design", "/a/b"]) {
+    assert.equal(
+      validateGatewayConfig({ ...config, routes: [{ ...baseRoute, mount }] }).valid,
+      true,
+      mount,
+    );
+  }
+  for (const mount of ["/", "/x/", "x", "/A", "/a.b", "/a//b"]) {
+    assert.equal(
+      validateGatewayConfig({ ...config, routes: [{ ...baseRoute, mount }] }).valid,
+      false,
+      mount,
+    );
+  }
+});
+
 test("rejects unsupported and wildcard route path forms", () => {
   const baseRoute = config.routes[0];
   for (const path of ["@x", "/x/*", "= /*", "^~ /*", "/*", "=/x", "~"]) {

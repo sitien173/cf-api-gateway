@@ -21,6 +21,59 @@ test("expands methods to separately compiled routes", () => {
   assert.deepEqual(compiled.routes.map(({ method }) => method), ["GET", "POST"]);
 });
 
+test("validates mounted route paths using runtime matching semantics", () => {
+  for (const path of ["~ ^/open-design(/|$)", "/open-design"]) {
+    const compiled = compileGateway(config({
+      routes: [{ path, methods: ["GET"], origin: "main", mount: "/open-design" }],
+    }), handlers);
+    assert.deepEqual(compiled.mounts, ["/open-design"]);
+  }
+
+  for (const path of ["= /open-design", "/other"]) {
+    assert.throws(
+      () => compileGateway(config({
+        routes: [{ path, methods: ["GET"], origin: "main", mount: "/open-design" }],
+      }), handlers),
+      /Route GET .*: path does not match mount \/open-design\//,
+    );
+  }
+});
+
+test("rejects nested mounts but permits distinct segment prefixes", () => {
+  assert.throws(
+    () => compileGateway(config({ routes: [
+      { path: "/a", methods: ["GET"], origin: "main", mount: "/a" },
+      { path: "/a/b", methods: ["GET"], origin: "main", mount: "/a/b" },
+    ] }), handlers),
+    /nested mounts.*\/a.*\/a\/b/,
+  );
+  assert.throws(
+    () => compileGateway(config({ routes: [
+      { path: "/a/b", methods: ["GET"], origin: "main", mount: "/a/b" },
+      { path: "/c", methods: ["GET"], origin: "main", mount: "/c" },
+      { path: "/a", methods: ["GET"], origin: "main", mount: "/a" },
+    ] }), handlers),
+    /nested mounts.*\/a\/b.*\/a/,
+  );
+
+  assert.doesNotThrow(() => compileGateway(config({ routes: [
+    { path: "/a", methods: ["GET"], origin: "main", mount: "/a" },
+    { path: "/ab", methods: ["GET"], origin: "main", mount: "/ab" },
+  ] }), handlers));
+});
+
+test("deduplicates and sorts compiled mounts and defaults to none", () => {
+  const compiled = compileGateway(config({ routes: [
+    { path: "/shared", methods: ["GET"], origin: "main", mount: "/shared" },
+    { path: "~ ^/shared(/|$)", methods: ["GET"], origin: "main", mount: "/shared" },
+    { path: "/z", methods: ["GET"], origin: "main", mount: "/z" },
+    { path: "/a", methods: ["GET"], origin: "main", mount: "/a" },
+    { path: "/long/mount", methods: ["GET"], origin: "main", mount: "/long/mount" },
+  ] }), handlers);
+  assert.deepEqual(compiled.mounts, ["/long/mount", "/shared", "/a", "/z"]);
+  assert.deepEqual(compileGateway(config(), handlers).mounts, []);
+});
+
 test("rejects unknown origins and policies with route context", () => {
   assert.throws(() => compileGateway(config({ routes: [{ path: "/x", methods: ["GET"], origin: "missing" }] }), handlers), /Route GET \/x: origin "missing" not found/);
   assert.throws(() => compileGateway(config({ routes: [{ path: "/x", methods: ["GET"], origin: "main", response: ["missing"] }] }), handlers), /Route GET \/x: Policy missing not found/);

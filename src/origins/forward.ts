@@ -62,7 +62,13 @@ const rewriteLocation = (
   try {
     locationUrl = new URL(location);
   } catch {
-    if (location.startsWith("/") && prefix && !location.startsWith(prefix)) {
+    const locationPath = location.split(/[?#]/, 1)[0] ?? location;
+    if (
+      location.startsWith("/") &&
+      prefix &&
+      locationPath !== base &&
+      !locationPath.startsWith(`${base}/`)
+    ) {
       return base + location;
     }
     return location;

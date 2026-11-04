@@ -36,6 +36,7 @@ export type RouteConfig = {
   response?: string[];
   auth?: "none";
   description?: string;
+  mount?: string;
 };
 
 export type GatewayConfig = {
@@ -72,6 +73,7 @@ export type CompiledRoute = {
   method: string;
   originType: string;
   matchMode: RouteMatchMode;
+  mount?: string;
   regex?: RegExp;
   order: number;
   origin: {
@@ -83,6 +85,7 @@ export type CompiledRoute = {
 };
 
 export type CompiledGateway = {
+  mounts: string[];
   routes: CompiledRoute[];
   // Same routes and order as routes, grouped by method for lookup.
   routesByMethod: Map<string, CompiledRoute[]>;
@@ -116,6 +119,7 @@ export type GatewayLogEvent = {
   configSource?: string;
   configHash?: string;
   reason?: string;
+  source?: string;
 };
 
 export type GatewayLogger = (event: GatewayLogEvent) => void;

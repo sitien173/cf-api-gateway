@@ -1,6 +1,14 @@
 import { errorMessage } from "../helpers/errors";
 import { ErrorResponse } from "../helpers/response";
 import { createLogContext, emitGatewayLog } from "./logging";
+import { isPrefixRoute, matchesRoutePattern } from "./matching";
+import {
+  buildMountContextCookie,
+  getMountForPath,
+  removeMountContextCookie,
+  resolveMountRequest,
+  rewriteMountSetCookies,
+} from "./mounts";
 import type {
   CompiledGateway,
   CompiledResponsePolicy,
@@ -13,14 +21,8 @@ import type {
 
 const defaultNow = () => Date.now();
 
-const isPrefixRoute = (route: CompiledRoute): boolean =>
-  route.matchMode === "prefix" || route.matchMode === "prefixStop";
-
-const matchesPattern = (route: CompiledRoute, pathname: string): boolean =>
-  route.matchMode === "exact" ? pathname === route.pattern : route.regex?.test(pathname) === true;
-
 // Routes are sorted exact, then prefixes longest first, then regexes in document order.
-const resolveRoute = (
+export const resolveRoute = (
   gateway: CompiledGateway,
   method: string,
   requestUrl: URL,
@@ -30,11 +32,11 @@ const resolveRoute = (
   let prefixMatched = false;
   for (const route of gateway.routesByMethod.get(method) ?? []) {
     if (isPrefixRoute(route)) {
-      if (prefixMatched || !pathname.startsWith(route.pattern)) continue;
+      if (prefixMatched || !matchesRoutePattern(route, pathname)) continue;
       prefixMatched = true;
       if (route.matchMode === "prefixStop") return route;
       rememberedPrefix = route;
-    } else if (matchesPattern(route, pathname)) {
+    } else if (matchesRoutePattern(route, pathname)) {
       return route;
     }
   }
@@ -87,6 +89,34 @@ const resolvePreflightRoute = (
 
   return resolveRoute(gateway, requestedMethod, requestUrl);
 };
+
+const appendResponseHeader = (
+  response: Response,
+  name: string,
+  value: string,
+): Response => {
+  try {
+    response.headers.append(name, value);
+    return response;
+  } catch {
+    const headers = new Headers(response.headers);
+    if (response.headers.getSetCookie) {
+      headers.delete("set-cookie");
+      for (const cookie of response.headers.getSetCookie()) {
+        headers.append("Set-Cookie", cookie);
+      }
+    }
+    headers.append(name, value);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+};
+
+const appendRecoveryVary = (response: Response): Response =>
+  appendResponseHeader(response, "Vary", "Referer, Cookie");
 
 export type FinalizeDetails = {
   route?: CompiledRoute;
@@ -165,15 +195,69 @@ export const executeGatewayRequest = async (
       { ...createLogContext(originalRequest, route), ...event },
       env,
     );
-  const finalize = (response: Response, details?: FinalizeDetails): Response =>
-    finalizeResponse(originalRequest, response, env, dependencies, latencyStart, {
-      route,
-      ...details,
-    });
+  let recovered = false;
+  let contextMount: string | undefined;
+  const finalize = (response: Response, details?: FinalizeDetails): Response => {
+    let finalizedResponse = response;
+    if (contextMount) {
+      finalizedResponse = appendResponseHeader(
+        finalizedResponse,
+        "Set-Cookie",
+        buildMountContextCookie(contextMount),
+      );
+    }
+    if (recovered) finalizedResponse = appendRecoveryVary(finalizedResponse);
+    return finalizeResponse(
+      originalRequest,
+      finalizedResponse,
+      env,
+      dependencies,
+      latencyStart,
+      { route, ...details },
+    );
+  };
+  let pipelineRequest = originalRequest;
 
   try {
-    const preflightRoute = resolvePreflightRoute(gateway, originalRequest, requestUrl);
-    route = preflightRoute ?? resolveRoute(gateway, originalRequest.method, requestUrl);
+    const resolution = resolveMountRequest(
+      gateway,
+      originalRequest,
+      requestUrl,
+      (candidateUrl) =>
+        resolvePreflightRoute(gateway, originalRequest, candidateUrl) ??
+        resolveRoute(gateway, originalRequest.method, candidateUrl),
+    );
+    route = resolution.route;
+    const isNavigation =
+      originalRequest.headers.get("sec-fetch-mode")?.toLowerCase() === "navigate";
+    contextMount =
+      route && isNavigation
+        ? getMountForPath(resolution.requestUrl.pathname, gateway.mounts)
+        : undefined;
+    if (resolution.source) {
+      recovered = true;
+      log({
+        level: "info",
+        stage: "mount_recovery",
+        outcome: isNavigation ? "redirected" : "dispatched",
+        source: resolution.source,
+      });
+    }
+    if (resolution.source && isNavigation) {
+      const location = `${resolution.mount}${requestUrl.pathname}${requestUrl.search}`;
+      return finalize(
+        new Response(null, { status: 307, headers: { Location: location } }),
+      );
+    }
+    if (resolution.source) {
+      pipelineRequest = new Request(resolution.requestUrl, originalRequest);
+    }
+    pipelineRequest = removeMountContextCookie(pipelineRequest, route?.mount);
+    const preflightRoute = resolvePreflightRoute(
+      gateway,
+      pipelineRequest,
+      resolution.requestUrl,
+    );
 
     if (!route) {
       return finalize(new ErrorResponse("Route not found", 404), { outcome: "route_miss" });
@@ -184,12 +268,12 @@ export const executeGatewayRequest = async (
         await applyResponsePolicies(
           route.responsePolicies,
           new Response(null, { status: 204 }),
-          originalRequest,
+          pipelineRequest,
         ),
       );
     }
 
-    let modifiedRequest: Request = originalRequest;
+    let modifiedRequest: Request = pipelineRequest;
 
     for (const policy of route.requestPolicies) {
       const result = await policy.handler(modifiedRequest, policy.options, env, (event) =>
@@ -197,7 +281,7 @@ export const executeGatewayRequest = async (
       );
 
       if (result instanceof Response) {
-        return finalize(await applyCorsPolicies(route, result, originalRequest), {
+        return finalize(await applyCorsPolicies(route, result, pipelineRequest), {
           outcome: "short_circuit",
           policyName: policy.name,
         });
@@ -211,8 +295,19 @@ export const executeGatewayRequest = async (
       log,
     });
 
+    const carriesWebSocket = Boolean(
+      (originResponse as Response & { webSocket?: unknown }).webSocket,
+    );
+    const namespacedOriginResponse =
+      route.mount && originResponse.status !== 101 && !carriesWebSocket
+        ? rewriteMountSetCookies(originResponse, route.mount, dependencies.now ?? defaultNow)
+        : originResponse;
     return finalize(
-      await applyResponsePolicies(route.responsePolicies, originResponse, originalRequest),
+      await applyResponsePolicies(
+        route.responsePolicies,
+        namespacedOriginResponse,
+        pipelineRequest,
+      ),
     );
   } catch (error) {
     log({
@@ -226,7 +321,7 @@ export const executeGatewayRequest = async (
     let response: Response = new ErrorResponse("An error occured.", 500);
     if (route) {
       try {
-        response = await applyCorsPolicies(route, response, originalRequest);
+        response = await applyCorsPolicies(route, response, pipelineRequest);
       } catch {
         // The original failure is already logged; the 500 goes out without CORS headers.
       }

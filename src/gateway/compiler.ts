@@ -4,6 +4,7 @@ import type {
 } from "../types";
 import { httpMethods } from "../config/schema-helpers";
 import { errorMessage } from "../helpers/errors";
+import { matchesRoutePattern } from "./matching";
 import type {
   CompiledGateway,
   CompiledRequestPolicy,
@@ -90,6 +91,25 @@ const duplicateKey = (matchMode: RouteMatchMode, pattern: string, path: string):
   return `prefix:${pattern}`;
 };
 
+const validateNestedMounts = (routes: GatewayConfig["routes"]): void => {
+  for (let i = 0; i < routes.length; i += 1) {
+    const left = routes[i];
+    if (!left.mount) continue;
+    for (let j = i + 1; j < routes.length; j += 1) {
+      const right = routes[j];
+      if (!right.mount || left.mount === right.mount) continue;
+      if (
+        left.mount.startsWith(`${right.mount}/`) ||
+        right.mount.startsWith(`${left.mount}/`)
+      ) {
+        throw new Error(
+          `Route ${right.path}: nested mounts "${left.mount}" and "${right.mount}" are not allowed`,
+        );
+      }
+    }
+  }
+};
+
 const compileRouteMethod = (
   route: GatewayConfig["routes"][number],
   method: string,
@@ -120,6 +140,9 @@ const compileRouteMethod = (
       new Error(`${routeLabel}invalid regex ${errorMessage(error)}`),
       { cause: error },
     );
+  }
+  if (route.mount && !matchesRoutePattern(parsedPath, `${route.mount}/`)) {
+    throw new Error(`${routeLabel}path does not match mount ${route.mount}/`);
   }
   const routeKey = `${method}\0${duplicateKey(parsedPath.matchMode, parsedPath.pattern, route.path)}`;
   if (seenRoutes.has(routeKey)) {
@@ -173,6 +196,7 @@ const compileRouteMethod = (
     method,
     originType: origin.type,
     matchMode: parsedPath.matchMode,
+    ...(route.mount ? { mount: route.mount } : {}),
     ...(parsedPath.regex ? { regex: parsedPath.regex } : {}),
     order,
     origin: {
@@ -227,6 +251,7 @@ export const compileGateway = (
   handlers: GatewayHandlers,
 ): CompiledGateway => {
   compilePolicies(config, handlers);
+  validateNestedMounts(config.routes);
 
   const routes: CompiledRoute[] = [];
   const seenRoutes = new Set<string>();
@@ -246,5 +271,8 @@ export const compileGateway = (
     routesByMethod.set(route.method, methodRoutes);
   }
 
-  return { routes, routesByMethod };
+  const mounts = [...new Set(config.routes.flatMap((route) => route.mount ? [route.mount] : []))]
+    .sort((left, right) => right.length - left.length || (left < right ? -1 : left > right ? 1 : 0));
+
+  return { mounts, routes, routesByMethod };
 };

@@ -56,8 +56,8 @@ This README describes the behaviour of version `0.4.8` as implemented in `src/`.
 `src/index.ts` handles every request in this order:
 
 1. Resolve the compiled gateway from the configuration source. If no candidate is valid, respond `503` with the text body `Gateway configuration unavailable` and permissive CORS headers.
-2. If the request is `OPTIONS` with an `Access-Control-Request-Method` header, treat it as a CORS preflight: find the route for the requested method, run only its response policies on an empty `204`, and return. Request policies and the origin are skipped.
-3. Find the first route whose method and path match. If none matches, respond `404` with `{"message":"Route not found"}`.
+2. Resolve a route, applying mounted-app recovery before ordinary route matching when mounts are configured. For `OPTIONS` with an `Access-Control-Request-Method` header, resolve using the requested method and treat a match as a CORS preflight: run only its response policies on an empty `204`, then return. Request policies and the origin are skipped.
+3. If no route resolves after mount recovery, respond `404` with `{"message":"Route not found"}`.
 4. Run the route's request policies in order. A policy either passes a request on or returns a response. A returned response ends the pipeline: only the route's `cors` response policies run on it, so a browser can read an auth failure.
 5. Call the route's origin handler.
 6. Run the route's response policies in order on the origin response.
@@ -132,6 +132,7 @@ Every origin and policy entry may carry a `description` string.
 | `response` | no | Ordered list of response policy keys. |
 | `auth` | no | Only value is `"none"`. Exempts the route from the gateway auth rule. |
 | `description` | no | Free text. |
+| `mount` | no | Validated path prefix used by runtime mount recovery for root-relative app requests. |
 
 ### Route matching
 
@@ -149,7 +150,79 @@ Compilation is all-or-nothing. Beyond the schema, the compiler rejects a documen
 - a policy listed under `request` is not a request policy type, or one listed under `response` is not a response policy type;
 - a route that does not set `"auth": "none"` can send a method other than `GET`, `HEAD`, or `OPTIONS` and lacks a request policy of type `apiKeyOrAuth0` or `basicAuth`. A `changeMethod` target counts as a method the route sends. Use `"auth": "none"` only when the origin enforces its own authentication;
 - such a route runs its auth policy after a `jsonBodyValidation` or `changeMethod` policy;
-- a policy's `compile` step rejects its options, for example a `cors` policy that combines `"*"` in `allowedOrigins` with `"allowCredentials": true`.
+- a policy's `compile` step rejects its options, for example a `cors` policy that combines `"*"` in `allowedOrigins` with `"allowCredentials": true`;
+- a route's optional `mount` does not match `^(/[a-z0-9][a-z0-9-]*)+$`;
+- a route's path does not match `<mount>/` using its configured exact, prefix, or regex matching mode;
+- distinct mounts are nested at a path-segment boundary. Multiple routes may share the same mount.
+
+## Mounted apps
+
+Use `mount` when an upstream serves its UI and API from `/` and cannot be configured with a web context path. Configure the route prefix and the `url` origin's `stripPrefix` together:
+
+```json
+{
+  "origins": {
+    "open-design": {
+      "type": "url",
+      "options": {
+        "url": "https://open-design.example.com",
+        "stripPrefix": "/open-design"
+      }
+    }
+  },
+  "policies": {},
+  "routes": [
+    {
+      "description": "Open Design app",
+      "path": "~ ^/open-design(/|$)",
+      "methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      "origin": "open-design",
+      "auth": "none",
+      "mount": "/open-design"
+    }
+  ]
+}
+```
+
+`auth: "none"` is appropriate only when the upstream enforces its own authentication. `stripPrefix` removes `/open-design` before forwarding, so `/open-design/api/x` reaches the upstream at `/api/x`. Make the route path match both `<mount>` and `<mount>/`, as the `(/|$)` regex does; a path such as `/open-design/` compiles but leaves bare `/open-design` unmatched, and rule 1 below then returns `404` without recovery.
+
+### Resolution and recovery
+
+Mounts are checked at path-segment boundaries: `/open-design` and `/open-design/...` are under the mount, but `/open-design-old` is not. The first applicable rule wins:
+
+1. A request already under any declared mount routes normally and cannot be overridden by a Referer or cookie.
+2. A parseable `Referer` with the exact same origin as the request identifies a mount when its path is under that mount. The gateway tries the mount plus the incoming request path; this takes precedence over an otherwise matching normal route. Declared mounts are considered longest first.
+3. If no Referer candidate resolves, a normal route for the incoming request wins.
+4. Only on a normal route miss, the `__Host-gw_mount` context cookie may identify a currently declared mount. The gateway tries that mount plus the incoming request path.
+5. If no candidate resolves, the gateway returns the ordinary `404` route-miss response.
+
+Route resolution for candidates uses the same method/path rules as ordinary requests, including the requested method for CORS preflights. Cross-origin or unparseable Referers and cookies naming undeclared mounts are ignored. A candidate with no matching route falls through to the next rule.
+
+For a recovered request with `Sec-Fetch-Mode: navigate`, the gateway returns a `307` to the mount-prefixed path and original query string. It does not run the target route's policies or origin for that redirect. Every other recovered request is internally dispatched to the prefixed URL and runs the full pipeline, including preflight handling, request and response policies, the origin, and error handling. This includes fetch/XHR, assets, WebSocket upgrades, and requests without `Sec-Fetch-*`. The origin's `stripPrefix` then removes the mount before forwarding.
+
+Recovered redirect and dispatch responses append `Vary: Referer, Cookie`, preserving any existing `Vary` value, so caches do not mix applications serving the same root URL.
+
+### Context cookie and operator limits
+
+A navigation whose resolved path is under a mount sets the session cookie `__Host-gw_mount=<mount>; Path=/; Secure; HttpOnly; SameSite=Lax`. It is host-only (`__Host-` requires `Secure`, `Path=/`, and no `Domain` attribute), is not an upstream session cookie, and is removed from every request before request policies or an origin can see it. The cookie provides only mount context; it does not namespace upstream cookies.
+
+Keep these limits in mind:
+
+- Browser-readable cookies and web storage (`localStorage`, `sessionStorage`, and IndexedDB) remain shared across apps on the gateway hostname. An XSS in one mounted app can access the shared origin's data.
+- A root request with no Referer and no prior mounted navigation/context cookie cannot identify an app. A normal route still wins; if none matches, the result is `404`.
+- `Vary: Referer, Cookie` reduces cache reuse for recovered root URLs.
+- Before rollout, verify the Worker can fetch `https://open-design.miseops.site`; the certificate observed during design had a wildcard subject.
+- The context cookie only provides mount recovery. Upstream `HttpOnly` cookie isolation is described below.
+
+### Cookie namespacing
+
+For a mounted route, the gateway derives a cookie namespace key from its mount by removing the leading `/` and replacing remaining `/` characters with `.`. For example, `/open-design` becomes `open-design` and `/a/b` becomes `a.b`.
+
+On an origin response for a mounted route, before response policies run, each `HttpOnly` `Set-Cookie` is renamed to `gwm_<key>__<name>` and its `Path` is set to `/`. A leading `__Host-` or `__Secure-` prefix stays in front; for example, `__Host-sid` becomes `__Host-gwm_open-design__sid`. A deleting cookie (`Max-Age` less than or equal to zero, or, when there is no valid `Max-Age`, an `Expires` date in the past) is emitted under both its original and namespaced names, whether or not it has `HttpOnly`. The namespaced deletion always uses `Path=/`, while the plain deletion retains its original `Path`. Other non-deleting cookies pass through unchanged.
+
+Before request policies run, a mounted route restores its own namespaced cookies to their original names, drops a plain cookie that duplicates a restored name, and drops namespaced cookies belonging to other mounts. Routes without a mount drop all `gwm_` cookies. The `__Host-gw_mount` context cookie is also removed before forwarding.
+
+Cookie namespacing has important limits: JavaScript-readable cookies and web storage (`localStorage`, `sessionStorage`, and IndexedDB) remain shared across apps on the gateway hostname; upstream `Domain=` attributes are not rewritten; cookies set on a `101` WebSocket upgrade response are not namespaced; and an XSS in one mounted app can reach the other apps' shared origin data.
 
 ## Origin types
 
@@ -168,7 +241,7 @@ Forwards the request to a single URL.
 
 When the request path starts with `stripPrefix` at a path segment boundary and the target URL path is `/`, the rest of the request path is appended to the target. With `"stripPrefix": "/udemy/v3"`, a request to `/udemy/v3/api/x` goes to `https://udemy.tienngodev.io.vn/api/x`, while `/udemy/v3x/api/x` does not match. With `"stripPrefix": "/"`, the full request path is forwarded. Without a prefix, or when the target URL has a non-root path, every request goes to the target URL path as written. The query string is always copied.
 
-A `Location` header pointing at the target host is rewritten to the gateway origin, with the prefix restored. A network failure returns `502` with `{"message":"Origin request failed"}`. A timeout returns `504` with `{"message":"Origin request timed out"}`.
+A root-relative `Location` is prefixed with `stripPrefix` unless its path (ignoring the query and fragment) already equals the prefix base or starts with `<base>/` at a path-segment boundary (so `/open-designer` is prefixed when the base is `/open-design`). An absolute `Location` pointing at the target host is rewritten to the gateway origin, with the prefix restored. A network failure returns `502` with `{"message":"Origin request failed"}`. A timeout returns `504` with `{"message":"Origin request timed out"}`.
 
 ### `upstreamWithFallback`
 
@@ -266,7 +339,7 @@ Set secrets with `npx wrangler secret put <NAME>`. Keep them out of `wrangler.to
 
 Pipeline code emits structured events through `emitGatewayLog` in `src/gateway/logging.ts`, written with `console.info` or `console.error`. Each event has `level`, `stage`, and `outcome`, plus context such as `method`, `routePath`, `originType`, `policyName`, `status`, `latencyMs`, `configSource`, `configHash`, and `reason`. `wrangler.toml` enables Workers Logs and traces with persistence.
 
-Each request emits one `info` event at stage `response_finalization`. Its `outcome` is `completed`, `short_circuit` with the `policyName` that ended the pipeline, `route_miss`, or `config_unavailable`. Errors and failover routing changes add their own events. Set `GATEWAY_LOG_LEVEL="error"` to drop the `info` events.
+Each request emits one `info` event at stage `response_finalization`. Its `outcome` is `completed`, `short_circuit` with the `policyName` that ended the pipeline, `route_miss`, or `config_unavailable`. Each mount recovery also emits one `info` event at stage `mount_recovery`, with `outcome: "redirected" | "dispatched"` and `source: "referer" | "cookie"`. Errors and failover routing changes add their own events. Set `GATEWAY_LOG_LEVEL="error"` to drop the `info` events.
 
 Stream live logs:
 

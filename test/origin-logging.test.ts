@@ -335,6 +335,44 @@ test("url origin strips prefixes only at a path segment boundary", async () => {
   }
 });
 
+test("url origin prefixes relative Locations only outside the stripPrefix segment", async () => {
+  const originalFetch = globalThis.fetch;
+  const cases = [
+    { location: "/open-design?x=1", expected: "/open-design?x=1" },
+    { location: "/open-design#a", expected: "/open-design#a" },
+    { location: "/open-design", expected: "/open-design" },
+    { location: "/open-design/x", expected: "/open-design/x" },
+    { location: "/open-design/x?y=1", expected: "/open-design/x?y=1" },
+    {
+      location: "/open-designer?x=1",
+      expected: "/open-design/open-designer?x=1",
+    },
+  ];
+  let index = 0;
+
+  globalThis.fetch = (async () => new Response(null, {
+    status: 302,
+    headers: { Location: cases[index++].location },
+  })) as typeof fetch;
+
+  try {
+    const options = { url: "https://origin.example.com", stripPrefix: "/open-design" };
+    const rewrittenLocations: Array<string | null> = [];
+    for (const _case of cases) {
+      const response = await url(
+        new Request("https://gateway.example.com/open-design/page"),
+        options,
+        originContext,
+      );
+      rewrittenLocations.push(response.headers.get("Location"));
+    }
+
+    assert.deepEqual(rewrittenLocations, cases.map(({ expected }) => expected));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("url origin rewrites upstream redirects through the gateway", async () => {
   const originalFetch = globalThis.fetch;
 

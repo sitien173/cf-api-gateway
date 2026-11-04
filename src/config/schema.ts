@@ -69,6 +69,7 @@ export const gatewayConfigSchema: Schema = closed(
           response: stringArray,
           auth: { type: "string", enum: ["none"] },
           description: { type: "string" },
+          mount: { type: "string", pattern: "^(/[a-z0-9][a-z0-9-]*)+$" },
         },
         ["path", "methods", "origin"],
       ),
