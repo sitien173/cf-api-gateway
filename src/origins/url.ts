@@ -21,7 +21,9 @@ const buildOriginUrl = (requestUrl: URL, options: UrlOptions, prefix: string | u
     originUrl.pathname = suffix;
   }
 
+  const configuredParams = new URLSearchParams(originUrl.search);
   originUrl.search = requestUrl.search;
+  configuredParams.forEach((value, key) => originUrl.searchParams.set(key, value));
   return originUrl.toString();
 };
 

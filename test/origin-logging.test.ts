@@ -398,3 +398,39 @@ test("url origin rewrites upstream redirects through the gateway", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("url origin keeps its configured query parameters over incoming ones", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = "";
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    capturedUrl =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    return new Response("ok", { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const response = await url(
+      new Request("https://gateway.example.com/badge?project=other&branch=main"),
+      {
+        url: "https://origin.example.com/api/badge?project=refract&token=t",
+        stripPrefix: "/badge",
+      },
+      originContext,
+    );
+
+    assert.equal(response.status, 200);
+    const forwarded = new URL(capturedUrl);
+    assert.equal(forwarded.pathname, "/api/badge");
+    assert.equal(forwarded.searchParams.get("project"), "refract");
+    assert.equal(forwarded.searchParams.get("token"), "t");
+    assert.equal(forwarded.searchParams.get("branch"), "main");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
